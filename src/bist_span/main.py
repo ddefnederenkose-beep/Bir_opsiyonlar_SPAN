@@ -257,9 +257,10 @@ def _available_strikes(series: dict, expiry: date) -> list[float]:
     """Bir vadedeki TÜM strike'ları (call+put birleşimi) sıralı döner.
 
     T/faiz/PSR/VSR seri (vade) bazında ortak olduğu için call'da olup
-    put'ta olmayan (ya da tam tersi) bir strike de listelenir -- implied
-    volatility o taraf için XML'de yoksa uygulama otomatik olarak
-    historical volatility'ye düşer (bkz. run_streamlit).
+    put'ta olmayan (ya da tam tersi) bir strike de listelenir. Böyle bir
+    durumda o TARAF için (implied volatility, taban fiyat, sonuç) hiçbir
+    teorik/uydurulmuş değer üretilmez -- run_streamlit o tarafı "bu tarihte
+    işlem görmemektedir" uyarısıyla tamamen hesaplama dışı bırakır.
     """
     expiry_data = series.get(expiry.strftime("%Y%m%d"))
     if not expiry_data:
@@ -1178,6 +1179,28 @@ def run_streamlit() -> None:
             pass
     takasbank_common = takasbank_call or takasbank_put
 
+    # Bir strike'ta call VEYA put'tan sadece biri işlem görüyor olabilir
+    # (ör. derin ITM/OTM taraf o gün hiç işlem görmemiş). Bu durumda o
+    # tarafa TEORİK/UYDURULMUŞ bir değer (historical vol, Black-Scholes
+    # fiyatı vb.) UYGULANMAZ -- o taraf tamamen hesaplama dışı bırakılır
+    # ve kullanıcıya "bu tarihte işlem görmemektedir" uyarısı gösterilir.
+    call_missing = bool(takasbank_series) and takasbank_call is None
+    put_missing = bool(takasbank_series) and takasbank_put is None
+    if call_missing:
+        st.warning(
+            f"⚠️ CALL {strike:g} — bu strike/vade Takasbank'ın günlük "
+            "verisinde bulunamadı, yani bu pozisyon bu tarihte işlem "
+            "görmemektedir. Teorik/uydurulmuş bir değer uygulanmayacak — "
+            "CALL için hesaplama yapılmayacak."
+        )
+    if put_missing:
+        st.warning(
+            f"⚠️ PUT {strike:g} — bu strike/vade Takasbank'ın günlük "
+            "verisinde bulunamadı, yani bu pozisyon bu tarihte işlem "
+            "görmemektedir. Teorik/uydurulmuş bir değer uygulanmayacak — "
+            "PUT için hesaplama yapılmayacak."
+        )
+
     auto_tte = (
         takasbank_common.time_to_expiry
         if takasbank_common
@@ -1282,72 +1305,110 @@ def run_streamlit() -> None:
     )
 
     st.markdown("**Volatilite** _(call ve put için ayrı — implied volatility strike/tipe göre farklı olabilir)_")
+    # NOT: call_missing/put_missing True ise (bu strike'ta o taraf Takasbank
+    # verisinde yok -- yani o gün işlem görmemiş), auto/fallback değeri HİÇ
+    # hesaplamıyoruz ve satırı HİÇ göstermiyoruz -- teorik/uydurulmuş bir
+    # değer üretip kullanıcıyı yanıltmak yerine, o taraf tamamen dışarıda
+    # bırakılır (bkz. yukarıdaki uyarı). yfinance historical/teorik BS
+    # fallback'i SADECE Takasbank'ta bu hisse için hiç veri yoksa (takasbank_series
+    # None) uygulanır -- o farklı bir durumdur (strike-özel eksiklik değil).
     if takasbank_call:
         call_vol_auto, call_vol_source = (
             takasbank_call.implied_volatility,
             "Takasbank XML",
         )
-    else:
+    elif not call_missing:
         call_vol_auto, call_vol_source = (
             fetched["volatility"],
             "yfinance historical (IV bulunamadı)",
         )
+    else:
+        call_vol_auto = call_vol_source = None
     if takasbank_put:
         put_vol_auto, put_vol_source = (
             takasbank_put.implied_volatility,
             "Takasbank XML",
         )
-    else:
+    elif not put_missing:
         put_vol_auto, put_vol_source = (
             fetched["volatility"],
             "yfinance historical (IV bulunamadı)",
         )
-    call_volatility = _streamlit_override_row(
-        st, "Volatilite — Call", call_vol_auto, "call_vol", source=_src(call_vol_source)
+    else:
+        put_vol_auto = put_vol_source = None
+
+    call_volatility = (
+        _streamlit_override_row(
+            st, "Volatilite — Call", call_vol_auto, "call_vol", source=_src(call_vol_source)
+        )
+        if not call_missing
+        else None
     )
-    put_volatility = _streamlit_override_row(
-        st, "Volatilite — Put", put_vol_auto, "put_vol", source=_src(put_vol_source)
+    put_volatility = (
+        _streamlit_override_row(
+            st, "Volatilite — Put", put_vol_auto, "put_vol", source=_src(put_vol_source)
+        )
+        if not put_missing
+        else None
     )
 
     # Taban fiyat: 16 senaryonun "Fark" hesabında Black-Scholes ile
     # hesaplanan YENİ (şoklu) fiyattan çıkarılan taban. Takasbank XML'de
     # <opt><p> olarak gelen GERÇEK piyasa fiyatı varsa o kullanılır (PC-SPAN
-    # Risk Array ekranıyla birebir örtüşmesi için); yoksa kendi teorik
-    # Black-Scholes fiyatımıza (aynı spot/vol/T/strike ile) düşülür --
-    # bu durumda "Fark" hesabı eski (BS-tabanlı) davranışla aynı olur.
+    # Risk Array ekranıyla birebir örtüşmesi için); yoksa (ve o taraf
+    # gerçekten işlem görüyorsa, sadece piyasa fiyatı XML'de yoksa) kendi
+    # teorik Black-Scholes fiyatımıza düşülür. call_missing/put_missing
+    # True ise (o taraf bu tarihte hiç işlem görmemişse) bu satır da HİÇ
+    # gösterilmez -- teorik bir fiyat uydurmuyoruz.
     effective_tte = (
         time_to_expiry_override if time_to_expiry_override is not None else auto_tte
     )
-    theoretical_call_price = black_scholes_price(
-        spot, strike, effective_tte, risk_free_rate, call_volatility, "call"
+    theoretical_call_price = (
+        black_scholes_price(spot, strike, effective_tte, risk_free_rate, call_volatility, "call")
+        if not call_missing
+        else None
     )
-    theoretical_put_price = black_scholes_price(
-        spot, strike, effective_tte, risk_free_rate, put_volatility, "put"
+    theoretical_put_price = (
+        black_scholes_price(spot, strike, effective_tte, risk_free_rate, put_volatility, "put")
+        if not put_missing
+        else None
     )
     if takasbank_call:
         call_base_auto, call_base_source = takasbank_call.market_price, "Takasbank XML"
-    else:
+    elif not call_missing:
         call_base_auto, call_base_source = (
             theoretical_call_price,
             "teorik Black-Scholes (Takasbank piyasa fiyatı bulunamadı)",
         )
+    else:
+        call_base_auto = call_base_source = None
     if takasbank_put:
         put_base_auto, put_base_source = takasbank_put.market_price, "Takasbank XML"
-    else:
+    elif not put_missing:
         put_base_auto, put_base_source = (
             theoretical_put_price,
             "teorik Black-Scholes (Takasbank piyasa fiyatı bulunamadı)",
         )
+    else:
+        put_base_auto = put_base_source = None
 
     st.markdown(
         "**Taban Fiyat** _(16 senaryonun 'Fark' hesabında şoklu Black-Scholes "
         "fiyatından çıkarılan taban — call ve put için ayrı)_"
     )
-    call_market_price = _streamlit_override_row(
-        st, "Taban Fiyat — Call", call_base_auto, "call_base", source=_src(call_base_source)
+    call_market_price = (
+        _streamlit_override_row(
+            st, "Taban Fiyat — Call", call_base_auto, "call_base", source=_src(call_base_source)
+        )
+        if not call_missing
+        else None
     )
-    put_market_price = _streamlit_override_row(
-        st, "Taban Fiyat — Put", put_base_auto, "put_base", source=_src(put_base_source)
+    put_market_price = (
+        _streamlit_override_row(
+            st, "Taban Fiyat — Put", put_base_auto, "put_base", source=_src(put_base_source)
+        )
+        if not put_missing
+        else None
     )
 
     st.divider()
@@ -1370,33 +1431,60 @@ def run_streamlit() -> None:
     )
 
     if st.button("Hesapla", type="primary"):
-        inputs = SpanCalculationInput(
-            ticker=fetched["ticker"],
-            strike=strike,
-            option_type="call",  # compute_call_and_put içinde yok sayılır
-            contracts=int(contracts),
-            expiry=expiry,
-            risk_params_file=Path(risk_params_file),
-            risk_free_rate=risk_free_rate,
-            spot_override=spot,
-            call_volatility_override=call_volatility,
-            put_volatility_override=put_volatility,
-            time_to_expiry_override=time_to_expiry_override,
-            price_scan_range_override=psr,
-            volatility_scan_range_override=vsr,
-            extreme_move_multiplier_override=emm,
-            extreme_move_covered_fraction_override=emcf,
-            intra_commodity_spread_charge_override=icsc,
-            short_option_minimum_override=som,
-            call_market_price_override=call_market_price,
-            put_market_price_override=put_market_price,
-        )
-        try:
-            st.session_state["results"] = compute_call_and_put(inputs)
-            st.session_state["results_inputs"] = inputs
-        except Exception as exc:
-            st.error(str(exc))
+        if call_missing and put_missing:
+            st.error(
+                "Ne CALL ne de PUT bu strike/vade için Takasbank verisinde "
+                "bulunuyor — bu pozisyon bu tarihte işlem görmemektedir, "
+                "hesaplama yapılamaz."
+            )
             st.session_state.pop("results", None)
+        else:
+            base_kwargs = dict(
+                ticker=fetched["ticker"],
+                strike=strike,
+                contracts=int(contracts),
+                expiry=expiry,
+                risk_params_file=Path(risk_params_file),
+                risk_free_rate=risk_free_rate,
+                spot_override=spot,
+                time_to_expiry_override=time_to_expiry_override,
+                price_scan_range_override=psr,
+                volatility_scan_range_override=vsr,
+                extreme_move_multiplier_override=emm,
+                extreme_move_covered_fraction_override=emcf,
+                intra_commodity_spread_charge_override=icsc,
+                short_option_minimum_override=som,
+            )
+            try:
+                new_results = {}
+                # Sadece o tarihte GERÇEKTEN işlem gören taraf(lar) hesaplanır
+                # -- call_missing/put_missing True olan taraf için hiç
+                # compute_span_result çağrılmıyor, teorik bir sonuç üretilmiyor.
+                if not call_missing:
+                    call_inputs = SpanCalculationInput(
+                        **base_kwargs,
+                        option_type="call",
+                        volatility_override=call_volatility,
+                        market_price_override=call_market_price,
+                    )
+                    new_results["call"] = compute_span_result(call_inputs)
+                if not put_missing:
+                    put_inputs = SpanCalculationInput(
+                        **base_kwargs,
+                        option_type="put",
+                        volatility_override=put_volatility,
+                        market_price_override=put_market_price,
+                    )
+                    new_results["put"] = compute_span_result(put_inputs)
+                st.session_state["results"] = new_results
+                st.session_state["results_inputs"] = SpanCalculationInput(
+                    **base_kwargs, option_type="call"
+                )
+                st.session_state["call_missing"] = call_missing
+                st.session_state["put_missing"] = put_missing
+            except Exception as exc:
+                st.error(str(exc))
+                st.session_state.pop("results", None)
 
     results = st.session_state.get("results")
     if results is None:
@@ -1405,21 +1493,32 @@ def run_streamlit() -> None:
 
     st.divider()
     m1, m2 = st.columns(2)
-    m1.metric(
-        "Call — Min. Teminat",
-        f"{results['call']['span']['total_initial_margin']:,.2f} TL",
-    )
-    m2.metric(
-        "Put — Min. Teminat",
-        f"{results['put']['span']['total_initial_margin']:,.2f} TL",
-    )
+    if "call" in results:
+        m1.metric(
+            "Call — Min. Teminat",
+            f"{results['call']['span']['total_initial_margin']:,.2f} TL",
+        )
+    else:
+        m1.warning("CALL bu tarihte işlem görmemektedir.")
+    if "put" in results:
+        m2.metric(
+            "Put — Min. Teminat",
+            f"{results['put']['span']['total_initial_margin']:,.2f} TL",
+        )
+    else:
+        m2.warning("PUT bu tarihte işlem görmemektedir.")
 
     if st.button("Bileşenler"):
         st.session_state["show_components"] = not st.session_state.get(
             "show_components", False
         )
     if st.session_state.get("show_components", False):
-        table = _format_comparison_table(result_inputs, results["call"], results["put"])
+        if "call" in results and "put" in results:
+            table = _format_comparison_table(result_inputs, results["call"], results["put"])
+        else:
+            side, result = next(iter(results.items()))
+            side_inputs = replace(result_inputs, option_type=side)
+            table = _format_result_table(side_inputs, result)
         st.dataframe(table, hide_index=True, use_container_width=True)
 
     st.divider()
@@ -1440,21 +1539,27 @@ def run_streamlit() -> None:
     st.subheader("16 SPAN Senaryosu ve P&L (Scanning Risk dökümü)")
     sc1, sc2 = st.columns(2)
     with sc1:
-        st.markdown(
-            f"**Call** — en kötü senaryo: "
-            f"#{results['call']['scenarios'].attrs['worst_scenario_no']}"
-        )
-        st.table(
-            _scenario_display_table(results["call"]["scenarios"], "Call Fiyatı")
-        )
+        if "call" in results:
+            st.markdown(
+                f"**Call** — en kötü senaryo: "
+                f"#{results['call']['scenarios'].attrs['worst_scenario_no']}"
+            )
+            st.table(
+                _scenario_display_table(results["call"]["scenarios"], "Call Fiyatı")
+            )
+        else:
+            st.caption("CALL bu tarihte işlem görmemektedir — senaryo tablosu yok.")
     with sc2:
-        st.markdown(
-            f"**Put** — en kötü senaryo: "
-            f"#{results['put']['scenarios'].attrs['worst_scenario_no']}"
-        )
-        st.table(
-            _scenario_display_table(results["put"]["scenarios"], "Put Fiyatı")
-        )
+        if "put" in results:
+            st.markdown(
+                f"**Put** — en kötü senaryo: "
+                f"#{results['put']['scenarios'].attrs['worst_scenario_no']}"
+            )
+            st.table(
+                _scenario_display_table(results["put"]["scenarios"], "Put Fiyatı")
+            )
+        else:
+            st.caption("PUT bu tarihte işlem görmemektedir — senaryo tablosu yok.")
 
 
 if __name__ == "__main__":
