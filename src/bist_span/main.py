@@ -756,16 +756,22 @@ def _streamlit_override_row(
         source: Verinin nereden geldiğini belirten kısa not (ör.
             "yfinance" ya da "Takasbank dökümanı"). Verilirse otomatik
             değerin yanında gösterilir.
-        decimals: Manuel giriş alanının ondalık basamak sayısı (adım
-            büyüklüğü de buna göre ayarlanır).
+        decimals: Manuel giriş alanının EKRANDA gösterdiği/adımladığı
+            ondalık basamak sayısı -- SADECE düzenleme kolaylığı içindir.
+            Kullanıcı alanı gerçekten değiştirmediği sürece hesaba giden
+            değer bu hassasiyete ASLA indirgenmez (bkz. aşağı).
         live: True ise, yeşil noktalı küçük bir "canlı" göstergesi eklenir
             (sadece gerçekten anlık/canlı çekilen veriler için, ör. spot).
 
     Returns:
-        Değiştir işaretliyse manuel girilen değer, değilse otomatik değer.
+        Değiştir işaretli VE kullanıcı gerçekten farklı bir değer
+        girmişse o değer; aksi halde (Değiştir kapalı, ya da açık ama
+        alan hâlâ otomatik değerin görüntülenen haliyle aynıysa) otomatik
+        değerin TAM (yuvarlanmamış) hâli.
     """
     val_key = f"{key}_val"
     chk_key = f"{key}_chk"
+    auto_display = round(float(auto_value), decimals)
 
     # Değiştir kapalıyken manuel alanın session_state'ini her zaman güncel
     # otomatik değere senkron tut. number_input'a hem "value" hem "key"
@@ -773,8 +779,12 @@ def _streamlit_override_row(
     # yok sayabiliyor -- bu da Değiştir ilk işaretlendiğinde alanın 0'a
     # sıfırlanmasına yol açıyordu. Tek doğru kaynak session_state olsun diye
     # "value" parametresini hiç vermiyoruz, sadece burada elle senkronluyoruz.
+    # ÖNEMLİ: bu sadece EKRANDA gösterilecek başlangıç metnidir -- kullanıcı
+    # dokunmadığı sürece dönüş değeri hâlâ auto_value'nun tam hassasiyeti
+    # olacak (aşağıdaki "değişti mi" kontrolüne bkz.), yuvarlanmış bu
+    # görüntü değeri formüle asla sızmaz.
     if not st.session_state.get(chk_key, False):
-        st.session_state[val_key] = round(float(auto_value), decimals)
+        st.session_state[val_key] = auto_display
 
     c1, c2, c3 = st.columns([2.2, 1.5, 1])
     with c1:
@@ -796,7 +806,17 @@ def _streamlit_override_row(
             label_visibility="collapsed",
             disabled=not use_override,
         )
-    return manual_value if use_override else auto_value
+
+    if not use_override:
+        return auto_value
+    # Kullanıcı kutuyu işaretleyip alana hiç dokunmadıysa (ekranda hâlâ
+    # otomatik değerin yuvarlanmış görüntüsü duruyorsa), o yuvarlanmış
+    # metni değil, auto_value'nun TAM hassasiyetini kullan. Sadece
+    # kullanıcı gerçekten farklı bir sayı yazdıysa onu (manual_value)
+    # kullan -- bu durumda hassasiyet, kullanıcının kendi girdisiyle sınırlı.
+    if manual_value == auto_display:
+        return auto_value
+    return manual_value
 
 
 def run_streamlit() -> None:
@@ -831,7 +851,11 @@ def run_streamlit() -> None:
             "Kontrat Sayısı (kısa pozisyon için negatif)", value=-1, step=1
         )
         risk_free_rate = st.number_input(
-            "Risksiz Faiz Oranı", min_value=0.0, value=0.45
+            "Risksiz Faiz Oranı",
+            min_value=0.0,
+            value=0.45,
+            step=0.0001,
+            format="%.4f",
         )
 
     @st.cache_data(show_spinner=False)
@@ -888,14 +912,19 @@ def run_streamlit() -> None:
     st.divider()
     st.subheader("Strike")
     strike = st.number_input(
-        "Kullanım Fiyatı", min_value=0.0, value=round(fetched["spot"], 2)
+        "Kullanım Fiyatı",
+        min_value=0.0,
+        value=round(fetched["spot"], 4),
+        step=0.0001,
+        format="%.4f",
     )
 
     auto_tte = (expiry - date.today()).days / 365
+    auto_tte_display = round(auto_tte, 4)
     # bkz. _streamlit_override_row -- aynı sebeple "value" değil session_state
     # kullanıyoruz (Değiştir ilk işaretlendiğinde 0'a sıfırlanma bug'ı).
     if not st.session_state.get("tte_chk", False):
-        st.session_state["tte_val"] = round(auto_tte, 4)
+        st.session_state["tte_val"] = auto_tte_display
 
     c1, c2, c3 = st.columns([2.2, 1.5, 1])
     with c1:
@@ -916,7 +945,15 @@ def run_streamlit() -> None:
             disabled=not override_tte,
             help="Bir referans hesaplayıcının (Excel vb.) ondalık T'siyle birebir karşılaştırmak için kullan.",
         )
-    time_to_expiry_override = manual_tte if override_tte else None
+    # Değiştir işaretli ama alan hâlâ otomatik değerin yuvarlanmış
+    # görüntüsündeyse (kullanıcı gerçekten dokunmadıysa), formüle giden T
+    # yine tam hassasiyetli auto_tte olsun -- yuvarlanmış görüntü değil.
+    if not override_tte:
+        time_to_expiry_override = None
+    elif manual_tte == auto_tte_display:
+        time_to_expiry_override = auto_tte
+    else:
+        time_to_expiry_override = manual_tte
 
     st.subheader("Otomatik Çekilen Değerler (istersen değiştir)")
     rp = fetched["risk_params"]
@@ -978,7 +1015,12 @@ def run_streamlit() -> None:
         "biliyorsan alanı değiştir."
     )
     icsc = st.number_input(
-        "Uygulanacak Spread Ücreti (TL)", value=0.0, min_value=0.0, key="icsc_applied"
+        "Uygulanacak Spread Ücreti (TL)",
+        value=0.0,
+        min_value=0.0,
+        step=0.0001,
+        format="%.4f",
+        key="icsc_applied",
     )
 
     if st.button("Hesapla", type="primary"):
