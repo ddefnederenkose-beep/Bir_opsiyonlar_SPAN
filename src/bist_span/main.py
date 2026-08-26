@@ -1136,7 +1136,7 @@ def run_streamlit() -> None:
         return
 
     ticker = st.selectbox(
-        "Hisse (opsiyon verisi olan hisseler)",
+        "Hisse",
         options=tickers,
         index=tickers.index("AKBNK") if "AKBNK" in tickers else 0,
         help=(
@@ -1354,7 +1354,7 @@ def run_streamlit() -> None:
     with c1:
         st.markdown("**Vadeye Kalan Süre (T, yıl)**")
         if takasbank_common:
-            st.caption(f"Otomatik: {_format_natural(auto_tte)}  ·  _Takasbank XML_")
+            st.caption(f"Otomatik: {_format_natural(auto_tte)}  ·  _(iş günü/250)_")
         else:
             st.caption(
                 f"Otomatik: {_format_natural(auto_tte)} "
@@ -1387,7 +1387,6 @@ def run_streamlit() -> None:
     else:
         time_to_expiry_override = manual_tte
 
-    st.subheader("Otomatik Çekilen Değerler (istersen değiştir)")
     rp = fetched["risk_params"]
 
     # Kaynak etiketini SADECE Takasbank XML'in DIŞINDAki bir kaynağa
@@ -1397,181 +1396,179 @@ def run_streamlit() -> None:
     def _src(label: str) -> str | None:
         return None if label == "Takasbank XML" else label
 
-    spot = _streamlit_override_row(
-        st, "Güncel Fiyat (Spot)", spot_auto, "spot", source=_src(spot_source), live=True
-    )
+    with st.expander("Otomatik Çekilen Değerler"):
+        spot = _streamlit_override_row(
+            st, "Güncel Fiyat (Spot)", spot_auto, "spot", source=_src(spot_source), live=True
+        )
 
-    # PSR/VSR/faiz: Takasbank'ın GÜNLÜK XML'i varsa oradan (canlı, bu vadeye
-    # özel), yoksa Takasbank PDF'inden (statik referans) -- ikisi de aynı
-    # kaynaktan (Takasbank) geldiği için kullanıcıya hangisi kullanıldığı
-    # etiketle belli edilir.
-    if takasbank_common:
-        psr_auto, psr_source = takasbank_common.price_scan_range, "Takasbank XML"
-        vsr_auto, vsr_source = takasbank_common.volatility_scan_range, "Takasbank XML"
-        emm_auto, emm_source = takasbank_common.extreme_move_multiplier, "Takasbank XML"
-        emcf_auto, emcf_source = (
-            takasbank_common.extreme_move_covered_fraction,
-            "Takasbank XML",
-        )
-        rate_auto, rate_source = takasbank_common.risk_free_rate, "Takasbank XML"
-    else:
-        psr_auto, psr_source = rp.price_scan_range, "Takasbank dökümanı (PDF)"
-        vsr_auto, vsr_source = rp.volatility_scan_range, "Takasbank dökümanı (PDF)"
-        emm_auto, emm_source = rp.extreme_move_multiplier, "Takasbank dökümanı (PDF)"
-        emcf_auto, emcf_source = (
-            rp.extreme_move_covered_fraction,
-            "Takasbank dökümanı (PDF)",
-        )
-        rate_auto, rate_source = 0.45, "varsayılan (Takasbank XML bulunamadı)"
+        # PSR/VSR/faiz: Takasbank'ın GÜNLÜK XML'i varsa oradan (canlı, bu
+        # vadeye özel), yoksa Takasbank PDF'inden (statik referans) --
+        # ikisi de aynı kaynaktan (Takasbank) geldiği için kullanıcıya
+        # hangisi kullanıldığı etiketle belli edilir.
+        if takasbank_common:
+            psr_auto, psr_source = takasbank_common.price_scan_range, "Takasbank XML"
+            vsr_auto, vsr_source = takasbank_common.volatility_scan_range, "Takasbank XML"
+            emm_auto, emm_source = takasbank_common.extreme_move_multiplier, "Takasbank XML"
+            emcf_auto, emcf_source = (
+                takasbank_common.extreme_move_covered_fraction,
+                "Takasbank XML",
+            )
+            rate_auto, rate_source = takasbank_common.risk_free_rate, "Takasbank XML"
+        else:
+            psr_auto, psr_source = rp.price_scan_range, "Takasbank dökümanı (PDF)"
+            vsr_auto, vsr_source = rp.volatility_scan_range, "Takasbank dökümanı (PDF)"
+            emm_auto, emm_source = rp.extreme_move_multiplier, "Takasbank dökümanı (PDF)"
+            emcf_auto, emcf_source = (
+                rp.extreme_move_covered_fraction,
+                "Takasbank dökümanı (PDF)",
+            )
+            rate_auto, rate_source = 0.45, "varsayılan (Takasbank XML bulunamadı)"
 
-    risk_free_rate = _streamlit_override_row(
-        st, "Risksiz Faiz Oranı", rate_auto, "rate", source=_src(rate_source)
-    )
-    psr = _streamlit_override_row(
-        st, "Price Scan Range (PSR)", psr_auto, "psr", source=_src(psr_source), decimals=4
-    )
-    vsr = _streamlit_override_row(
-        st, "Volatility Scan Range (VSR)", vsr_auto, "vsr", source=_src(vsr_source)
-    )
-    emm = _streamlit_override_row(
-        st, "Extreme Move Multiplier", emm_auto, "emm", source=_src(emm_source)
-    )
-    emcf = _streamlit_override_row(
-        st, "Extreme Move Covered Fraction", emcf_auto, "emcf", source=_src(emcf_source)
-    )
-    som = _streamlit_override_row(
-        st,
-        "Short Option Minimum (SOM)",
-        rp.short_option_minimum,
-        "som",
-        source="Takasbank dökümanı (PDF)",
-    )
+        risk_free_rate = _streamlit_override_row(
+            st, "Risksiz Faiz Oranı", rate_auto, "rate", source=_src(rate_source)
+        )
+        psr = _streamlit_override_row(
+            st, "Price Scan Range (PSR)", psr_auto, "psr", source=_src(psr_source), decimals=4
+        )
+        vsr = _streamlit_override_row(
+            st, "Volatility Scan Range (VSR)", vsr_auto, "vsr", source=_src(vsr_source)
+        )
+        emm = _streamlit_override_row(
+            st, "Extreme Move Multiplier", emm_auto, "emm", source=_src(emm_source)
+        )
+        emcf = _streamlit_override_row(
+            st, "Extreme Move Covered Fraction", emcf_auto, "emcf", source=_src(emcf_source)
+        )
+        som = _streamlit_override_row(
+            st,
+            "Short Option Minimum (SOM)",
+            rp.short_option_minimum,
+            "som",
+            source="Takasbank dökümanı (PDF)",
+        )
 
-    st.markdown("**Volatilite** _(call ve put için ayrı — implied volatility strike/tipe göre farklı olabilir)_")
-    # NOT: call_missing/put_missing True ise (bu strike'ta o taraf Takasbank
-    # verisinde yok -- yani o gün işlem görmemiş), auto/fallback değeri HİÇ
-    # hesaplamıyoruz ve satırı HİÇ göstermiyoruz -- teorik/uydurulmuş bir
-    # değer üretip kullanıcıyı yanıltmak yerine, o taraf tamamen dışarıda
-    # bırakılır (bkz. yukarıdaki uyarı). yfinance historical/teorik BS
-    # fallback'i SADECE Takasbank'ta bu hisse için hiç veri yoksa (takasbank_series
-    # None) uygulanır -- o farklı bir durumdur (strike-özel eksiklik değil).
-    if takasbank_call:
-        call_vol_auto, call_vol_source = (
-            takasbank_call.implied_volatility,
-            "Takasbank XML",
-        )
-    elif not call_missing:
-        call_vol_auto, call_vol_source = (
-            fetched["volatility"],
-            "yfinance historical (IV bulunamadı)",
-        )
-    else:
-        call_vol_auto = call_vol_source = None
-    if takasbank_put:
-        put_vol_auto, put_vol_source = (
-            takasbank_put.implied_volatility,
-            "Takasbank XML",
-        )
-    elif not put_missing:
-        put_vol_auto, put_vol_source = (
-            fetched["volatility"],
-            "yfinance historical (IV bulunamadı)",
-        )
-    else:
-        put_vol_auto = put_vol_source = None
+        st.markdown("**Volatilite**")
+        # NOT: call_missing/put_missing True ise (bu strike'ta o taraf Takasbank
+        # verisinde yok -- yani o gün işlem görmemiş), auto/fallback değeri HİÇ
+        # hesaplamıyoruz ve satırı HİÇ göstermiyoruz -- teorik/uydurulmuş bir
+        # değer üretip kullanıcıyı yanıltmak yerine, o taraf tamamen dışarıda
+        # bırakılır (bkz. yukarıdaki uyarı). yfinance historical/teorik BS
+        # fallback'i SADECE Takasbank'ta bu hisse için hiç veri yoksa (takasbank_series
+        # None) uygulanır -- o farklı bir durumdur (strike-özel eksiklik değil).
+        if takasbank_call:
+            call_vol_auto, call_vol_source = (
+                takasbank_call.implied_volatility,
+                "Takasbank XML",
+            )
+        elif not call_missing:
+            call_vol_auto, call_vol_source = (
+                fetched["volatility"],
+                "yfinance historical (IV bulunamadı)",
+            )
+        else:
+            call_vol_auto = call_vol_source = None
+        if takasbank_put:
+            put_vol_auto, put_vol_source = (
+                takasbank_put.implied_volatility,
+                "Takasbank XML",
+            )
+        elif not put_missing:
+            put_vol_auto, put_vol_source = (
+                fetched["volatility"],
+                "yfinance historical (IV bulunamadı)",
+            )
+        else:
+            put_vol_auto = put_vol_source = None
 
-    call_volatility = (
-        _streamlit_override_row(
-            st, "Volatilite — Call", call_vol_auto, "call_vol", source=_src(call_vol_source)
+        call_volatility = (
+            _streamlit_override_row(
+                st, "Volatilite — Call", call_vol_auto, "call_vol", source=_src(call_vol_source)
+            )
+            if not call_missing
+            else None
         )
-        if not call_missing
-        else None
-    )
-    put_volatility = (
-        _streamlit_override_row(
-            st, "Volatilite — Put", put_vol_auto, "put_vol", source=_src(put_vol_source)
+        put_volatility = (
+            _streamlit_override_row(
+                st, "Volatilite — Put", put_vol_auto, "put_vol", source=_src(put_vol_source)
+            )
+            if not put_missing
+            else None
         )
-        if not put_missing
-        else None
-    )
 
-    # Taban fiyat: 16 senaryonun "Fark" hesabında Black-Scholes ile
-    # hesaplanan YENİ (şoklu) fiyattan çıkarılan taban. Takasbank XML'de
-    # <opt><p> olarak gelen GERÇEK piyasa fiyatı varsa o kullanılır (PC-SPAN
-    # Risk Array ekranıyla birebir örtüşmesi için); yoksa (ve o taraf
-    # gerçekten işlem görüyorsa, sadece piyasa fiyatı XML'de yoksa) kendi
-    # teorik Black-Scholes fiyatımıza düşülür. call_missing/put_missing
-    # True ise (o taraf bu tarihte hiç işlem görmemişse) bu satır da HİÇ
-    # gösterilmez -- teorik bir fiyat uydurmuyoruz.
-    effective_tte = (
-        time_to_expiry_override if time_to_expiry_override is not None else auto_tte
-    )
-    theoretical_call_price = (
-        black_scholes_price(spot, strike, effective_tte, risk_free_rate, call_volatility, "call")
-        if not call_missing
-        else None
-    )
-    theoretical_put_price = (
-        black_scholes_price(spot, strike, effective_tte, risk_free_rate, put_volatility, "put")
-        if not put_missing
-        else None
-    )
-    if takasbank_call:
-        call_base_auto, call_base_source = takasbank_call.market_price, "Takasbank XML"
-    elif not call_missing:
-        call_base_auto, call_base_source = (
-            theoretical_call_price,
-            "teorik Black-Scholes (Takasbank piyasa fiyatı bulunamadı)",
+        # Taban fiyat: 16 senaryonun "Fark" hesabında Black-Scholes ile
+        # hesaplanan YENİ (şoklu) fiyattan çıkarılan taban. Takasbank XML'de
+        # <opt><p> olarak gelen GERÇEK piyasa fiyatı varsa o kullanılır (PC-SPAN
+        # Risk Array ekranıyla birebir örtüşmesi için); yoksa (ve o taraf
+        # gerçekten işlem görüyorsa, sadece piyasa fiyatı XML'de yoksa) kendi
+        # teorik Black-Scholes fiyatımıza düşülür. call_missing/put_missing
+        # True ise (o taraf bu tarihte hiç işlem görmemişse) bu satır da HİÇ
+        # gösterilmez -- teorik bir fiyat uydurmuyoruz.
+        effective_tte = (
+            time_to_expiry_override if time_to_expiry_override is not None else auto_tte
         )
-    else:
-        call_base_auto = call_base_source = None
-    if takasbank_put:
-        put_base_auto, put_base_source = takasbank_put.market_price, "Takasbank XML"
-    elif not put_missing:
-        put_base_auto, put_base_source = (
-            theoretical_put_price,
-            "teorik Black-Scholes (Takasbank piyasa fiyatı bulunamadı)",
+        theoretical_call_price = (
+            black_scholes_price(spot, strike, effective_tte, risk_free_rate, call_volatility, "call")
+            if not call_missing
+            else None
         )
-    else:
-        put_base_auto = put_base_source = None
+        theoretical_put_price = (
+            black_scholes_price(spot, strike, effective_tte, risk_free_rate, put_volatility, "put")
+            if not put_missing
+            else None
+        )
+        if takasbank_call:
+            call_base_auto, call_base_source = takasbank_call.market_price, "Takasbank XML"
+        elif not call_missing:
+            call_base_auto, call_base_source = (
+                theoretical_call_price,
+                "teorik Black-Scholes (Takasbank piyasa fiyatı bulunamadı)",
+            )
+        else:
+            call_base_auto = call_base_source = None
+        if takasbank_put:
+            put_base_auto, put_base_source = takasbank_put.market_price, "Takasbank XML"
+        elif not put_missing:
+            put_base_auto, put_base_source = (
+                theoretical_put_price,
+                "teorik Black-Scholes (Takasbank piyasa fiyatı bulunamadı)",
+            )
+        else:
+            put_base_auto = put_base_source = None
 
-    st.markdown(
-        "**Taban Fiyat** _(16 senaryonun 'Fark' hesabında şoklu Black-Scholes "
-        "fiyatından çıkarılan taban — call ve put için ayrı)_"
-    )
-    call_market_price = (
-        _streamlit_override_row(
-            st, "Taban Fiyat — Call", call_base_auto, "call_base", source=_src(call_base_source)
+        st.markdown("**Call/Put Opsiyon Uzlaşma Fiyatı**")
+        call_market_price = (
+            _streamlit_override_row(
+                st, "Taban Fiyat — Call", call_base_auto, "call_base", source=_src(call_base_source)
+            )
+            if not call_missing
+            else None
         )
-        if not call_missing
-        else None
-    )
-    put_market_price = (
-        _streamlit_override_row(
-            st, "Taban Fiyat — Put", put_base_auto, "put_base", source=_src(put_base_source)
+        put_market_price = (
+            _streamlit_override_row(
+                st, "Taban Fiyat — Put", put_base_auto, "put_base", source=_src(put_base_source)
+            )
+            if not put_missing
+            else None
         )
-        if not put_missing
-        else None
-    )
 
-    st.divider()
-    st.subheader("Vadeler Arası Spread Ücreti (Intra-Commodity Spread Charge)")
-    st.caption(
-        f"Takasbank'ın {fetched['ticker']} için yayınladığı referans değer: "
-        f"**{rp.intra_commodity_spread_charge:,.2f} TL / spread birimi**. "
-        "Bu ücret SADECE aynı dayanak varlıkta birden fazla vadeli gerçek bir "
-        "spread pozisyonun varsa uygulanır. Aşağıdaki tek bacaklı/tek vadeli "
-        "pozisyon için doğru değer **0**'dır — spread pozisyonun olduğunu "
-        "biliyorsan alanı değiştir."
-    )
-    icsc = st.number_input(
-        "Uygulanacak Spread Ücreti (TL)",
-        value=0.0,
-        min_value=0.0,
-        step=0.0001,
-        format="%.4f",
-        key="icsc_applied",
-    )
+        st.divider()
+        icsc_help = (
+            f"Takasbank'ın {fetched['ticker']} için yayınladığı referans değer: "
+            f"{rp.intra_commodity_spread_charge:,.2f} TL / spread birimi. Bu "
+            "ücret SADECE aynı dayanak varlıkta birden fazla vadeli gerçek "
+            "bir spread pozisyonun varsa uygulanır. Aşağıdaki tek bacaklı/"
+            "tek vadeli pozisyon için doğru değer 0'dır — spread "
+            "pozisyonun olduğunu biliyorsan alanı değiştir."
+        )
+        icsc = st.number_input(
+            "Vadeler Arası Spread Ücreti (Intra-Commodity Spread Charge, TL)",
+            value=0.0,
+            min_value=0.0,
+            step=0.0001,
+            format="%.4f",
+            key="icsc_applied",
+            help=icsc_help,
+        )
 
     if st.button("Hesapla", type="primary"):
         if call_missing and put_missing:
