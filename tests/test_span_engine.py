@@ -124,17 +124,25 @@ def test_option_position_contract_size_defaults_to_100():
 
 
 # ---------------------------------------------------------------------------
-# THYAO_SPAN_Hesaplama-2.xlsx referans doğrulaması
+# THYAO_SPAN_Hesaplama-2.xlsx + Takasbank resmi PC-SPAN üretim verisi
+# referans doğrulaması
 #
-# Kullanıcının hazırladığı Excel hesaplayıcıdan (Google Drive) hücre hücre
-# alınmış 32 satır (16 call + 16 put). Girdi: THYAO K=280, S0=301.50,
+# 14 REGULAR satır (1-14), kullanıcının hazırladığı Excel hesaplayıcıdan
+# (Google Drive) hücre hücre alınmıştır. Girdi: THYAO K=280, S0=301.50,
 # T=0.1096, vol=0.3021, r=0.35, PSR=0.134, VSR=0.28, EMM=3, EMCF=0.32,
 # kontrat_büyüklüğü=100, kısa 1 kontrat.
 #
-# Bu tablo, projede daha önce yaşanan iki gerçek hatayı ortaya çıkardı:
+# 2 EXTREME satır (15-16) ARTIK Excel'den DEĞİL, Takasbank'ın kendi resmi
+# PC-SPAN üretim dosyasından (spanFile/pointDef/scanPointDef, point 15-16)
+# doğrulanmıştır -- Excel bu iki senaryoda "vol_shock=+VSR" varsayıyordu,
+# ama Takasbank'ın kendi üretim verisi volScanDef.mult=0.0 (vol şoklanmaz)
+# diyor; resmi kaynak kazandı, kodu ona göre düzelttik (bkz. span_engine.
+# generate_risk_scenarios docstring'i).
+#
+# Bu tablo, projede daha önce yaşanan üç gerçek hatayı ortaya çıkardı:
 # 1) vol_shock TOPLAMSAL değil ÇARPIMSAL uygulanmalıymış (vol*(1+VSR)).
-# 2) Extreme move senaryoları vol_shock=0 değil, her zaman vol YUKARI
-#    şoku kullanmalıymış.
+# 2) Extreme move senaryolarında vol_shock=0 olmalıymış (Excel'in aksine).
+# 3) (Ayrı bir turda) kontrat çarpanı (100) hiç uygulanmıyormuş.
 # Her satır (senaryo, fiyat çarpanı, vol yönü) -> beklenen "Kısa K/Z" (TL).
 # ---------------------------------------------------------------------------
 _THYAO_INPUTS = dict(
@@ -170,8 +178,8 @@ _THYAO_CALL_ROWS = [
     (12, 1, -1, -3853.741556),
     (13, -1, 1, 2413.855041),
     (14, -1, -1, 2974.772881),
-    (15, 3, 1, -3818.849877),  # extreme up
-    (16, -3, 1, 1084.70921),  # extreme down (vol_shock hâlâ yukarı!)
+    (15, 3, 0, -3818.775215174316),  # extreme up (Takasbank resmi: vol_shock=0)
+    (16, -3, 0, 1084.913691081266),  # extreme down (Takasbank resmi: vol_shock=0)
 ]
 _THYAO_PUT_ROWS = [
     (1, 0, 1, -194.6821341),
@@ -188,8 +196,8 @@ _THYAO_PUT_ROWS = [
     (12, 1, -1, 186.3584442),
     (13, -1, 1, -1626.244959),
     (14, -1, -1, -1065.327119),
-    (15, 3, 1, 59.64612296),  # extreme up
-    (16, -3, 1, -2793.78679),  # extreme down (vol_shock hâlâ yukarı!)
+    (15, 3, 0, 59.72078482568521),  # extreme up (Takasbank resmi: vol_shock=0)
+    (16, -3, 0, -2793.5823089187343),  # extreme down (Takasbank resmi: vol_shock=0)
 ]
 
 
@@ -201,7 +209,8 @@ _THYAO_PUT_ROWS = [
     + [f"put-sen{row[0]}" for row in _THYAO_PUT_ROWS],
 )
 def test_thyao_scenario_pnl_matches_excel_reference(option_type, row):
-    """32 satırın (16 call + 16 put) her biri, Excel'deki Kısa K/Z ile eşleşmeli."""
+    """32 satırın (14 regular Excel'den, 2 extreme Takasbank resmi veriden)
+    her biri, beklenen Kısa K/Z ile eşleşmeli."""
     scenario_no, price_multiplier, vol_direction, expected_pnl = row
     is_extreme = scenario_no >= 15
     # price_multiplier, Excel'deki "Fiyat Çarpanı" kolonuyla birebir aynı:
@@ -212,7 +221,7 @@ def test_thyao_scenario_pnl_matches_excel_reference(option_type, row):
     if is_extreme:
         scenario = {
             "price_shock": price_shock,
-            "vol_shock": _THYAO_RISK_PARAMS.volatility_scan_range,  # hep yukarı
+            "vol_shock": 0.0,  # Takasbank resmi PC-SPAN verisi: extreme'de vol şoklanmaz
             "is_extreme": True,
             "covered_fraction": _THYAO_RISK_PARAMS.extreme_move_covered_fraction,
         }
@@ -240,16 +249,18 @@ def test_thyao_scenario_pnl_matches_excel_reference(option_type, row):
 
 @pytest.mark.parametrize(
     "option_type,expected_scan_risk",
-    [("call", 3901.039329), ("put", 2793.78679)],
+    [("call", 3901.039329), ("put", 2793.582309)],
 )
 def test_thyao_calculate_span_margin_matches_excel_sonuclar(
     option_type, expected_scan_risk
 ):
-    """calculate_span_margin'in tam çıktısı, Excel'in SONUÇLAR bölümüyle eşleşmeli.
+    """calculate_span_margin'in tam çıktısı beklenen referans değerlerle eşleşmeli.
 
-    Excel: CALL Scanning Risk=3.901,04 (Aktif Senaryo #11) -> SOM'u (1.640)
-    geçtiği için Toplam=3.901,04. PUT Scanning Risk=2.793,79 (Aktif
-    Senaryo #16) -> yine SOM'u geçtiği için Toplam=2.793,79.
+    CALL Scanning Risk=3.901,04 (Aktif Senaryo #11, regular -- Excel'le
+    doğrulanmış) -> SOM'u (1.640) geçtiği için Toplam=3.901,04.
+    PUT Scanning Risk=2.793,58 (Aktif Senaryo #16, extreme -- Takasbank'ın
+    resmi PC-SPAN verisiyle doğrulanmış, vol_shock=0) -> yine SOM'u geçtiği
+    için Toplam=2.793,58.
     """
     position = OptionPosition(
         ticker="THYAO",
@@ -270,10 +281,14 @@ def test_thyao_calculate_span_margin_matches_excel_sonuclar(
     assert result["intra_commodity_spread_charge"] == 0.0  # tek bacaklı pozisyon
 
 
-def test_generate_risk_scenarios_extreme_uses_multiplicative_vol_up():
-    """Extreme senaryolar vol_shock=0 DEĞİL, her zaman +VSR (vol yukarı) kullanmalı.
+def test_generate_risk_scenarios_extreme_uses_zero_vol_shock():
+    """Extreme senaryolarda vol_shock=0 olmalı (volatilite şoklanmaz).
 
-    (Excel referansıyla doğrulanan bug fix -- eskiden vol_shock=0.0 idi.)
+    Takasbank'ın kendi resmi PC-SPAN üretim dosyasıyla (spanFile/pointDef/
+    scanPointDef, point 15-16 -> volScanDef.mult=0.0) doğrulanmıştır. Bir
+    kullanıcı Excel'i daha önce "extreme'de her zaman vol yukarı"
+    varsayıyordu; Takasbank'ın kendi üretim verisiyle karşılaştırıldığında
+    bunun yanlış olduğu görüldü ve resmi kaynak lehine düzeltildi.
     """
     scenarios = span_engine.generate_risk_scenarios(
         spot=100,
@@ -286,7 +301,7 @@ def test_generate_risk_scenarios_extreme_uses_multiplicative_vol_up():
     extreme_scenarios = [s for s in scenarios if s["is_extreme"]]
     assert len(extreme_scenarios) == 2
     for s in extreme_scenarios:
-        assert s["vol_shock"] == pytest.approx(0.28)
+        assert s["vol_shock"] == pytest.approx(0.0)
 
 
 def test_calculate_scenario_pnl_applies_vol_shock_multiplicatively():

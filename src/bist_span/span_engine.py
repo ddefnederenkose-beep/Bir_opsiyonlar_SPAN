@@ -145,10 +145,14 @@ def generate_risk_scenarios(
     toplamsal şok kullanmak, özellikle yüksek volatiliteli hisselerde
     Scan Risk'i ciddi ölçüde yanlış hesaplatıyordu.
 
-    Extreme move senaryoları (fiyat yönünden bağımsız olarak) HER ZAMAN
-    volatilite yukarı şoku kullanır -- bu da referans hesaplayıcıyla
-    doğrulanmıştır (aşağı fiyat + yukarı vol kombinasyonu, aşırı hareket
-    senaryosunda vol sabit tutmaktan daha kötü/muhafazakar bir sonuç verir).
+    Extreme move senaryolarında vol_shock=0'dır (volatilite şoklanmaz,
+    sadece fiyat şoklanır). Bu, Takasbank'ın kendi resmi PC-SPAN üretim
+    dosyasındaki (spanFile/pointDef/scanPointDef, point 15-16) global
+    tanımla doğrulanmıştır: bu noktalarda volScanDef.mult=0.0'dır.
+    (Not: bir kullanıcı Excel'i daha önce "extreme'de her zaman vol
+    yukarı" varsayımıyla test edilmişti; Takasbank'ın kendi üretim
+    verisiyle karşılaştırıldığında bu varsayımın yanlış olduğu görüldü
+    ve resmi kaynak lehine geri alındı.)
 
     Args:
         spot: Dayanak varlık güncel fiyatı.
@@ -188,7 +192,7 @@ def generate_risk_scenarios(
         scenarios.append(
             {
                 "price_shock": direction * extreme_move_multiplier * price_scan_range,
-                "vol_shock": volatility_scan_range,  # her zaman vol yukarı
+                "vol_shock": 0.0,  # Takasbank PC-SPAN: extreme'de vol şoklanmaz
                 "is_extreme": True,
                 "covered_fraction": extreme_move_covered_fraction,
             }

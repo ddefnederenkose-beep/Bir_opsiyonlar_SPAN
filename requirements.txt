@@ -5,3 +5,4 @@ scipy>=1.10
 pdfplumber>=0.11
 streamlit>=1.35
 pytest>=8.0
+requests>=2.31
