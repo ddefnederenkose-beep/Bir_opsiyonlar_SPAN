@@ -1078,6 +1078,20 @@ def run_streamlit() -> None:
         return
 
     takasbank_series = fetched.get("takasbank_series")
+    # last_update_info() SADECE diskteki cache'i okur, kendisi asla tazelemez
+    # -- tazeleme (gün içi cache 15 dakikadan eskiyse Takasbank'ta daha
+    # güncel/nihai bir dosya çıkmış mı diye bakma) ensure_daily_cache()
+    # içindedir. Önceden ensure_daily_cache() SADECE "Verileri Çek"e
+    # basıldığında çağrılıyordu -- kullanıcı sayfada kalıp tekrar
+    # basmadığı sürece "son güncelleme" saati hep İLK çekişte kalıyordu,
+    # gerçekte daha yeni bir dosya çıksa bile. Burada -- Streamlit her
+    # widget etkileşiminde tüm scripti yeniden çalıştırdığı için -- her
+    # rerun'da (throttle'lı, çoğu zaman ağa hiç gitmeden) çağırarak sayfa
+    # açık kaldığı sürece otomatik tazelenmesini sağlıyoruz.
+    try:
+        takasbank_xml.ensure_daily_cache()
+    except Exception:
+        pass
     takasbank_info = takasbank_xml.last_update_info()
 
     # Spot fiyat ARTIK ANA KAYNAK olarak Takasbank'ın günlük XML'inden
