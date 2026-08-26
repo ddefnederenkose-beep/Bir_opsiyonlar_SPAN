@@ -28,6 +28,7 @@ Streamlit kullanımı:
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 from dataclasses import dataclass, replace
@@ -46,7 +47,7 @@ _SRC_DIR = str(Path(__file__).resolve().parent.parent)
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-from bist_span import data_fetch
+from bist_span import data_fetch, takasbank_xml
 from bist_span.risk_params import RiskParams, RiskParamsStore, parse_takasbank_span_file
 from bist_span.span_engine import (
     OptionPosition,
@@ -99,7 +100,14 @@ class SpanCalculationInput:
         period: Historical volatility hesabı için geçmiş veri periyodu.
         spot_override: Verilirse yfinance yerine bu spot fiyatı kullanılır.
         volatility_override: Verilirse hesaplanan historical volatility
-            yerine bu değer kullanılır.
+            yerine bu değer kullanılır (hem call hem put için paylaşılan
+            varsayılan). call_volatility_override/put_volatility_override
+            verilmişse, o taraf için ONLAR kullanılır (Takasbank implied
+            volatility -- her strike/tip için farklı olabilir).
+        call_volatility_override, put_volatility_override: Verilirse, o
+            tarafın volatilitesi olarak (volatility_override yerine)
+            kullanılır. Streamlit arayüzü bunları Takasbank XML'inden
+            gelen implied volatility ile doldurur.
         time_to_expiry_override: Verilirse (expiry - bugün).gün/365'ten
             hesaplanan T yerine bu değer (yıl cinsinden) doğrudan kullanılır.
             Takvim tarihi her zaman TAM gün sayısı verir (ör. 37/365 =
@@ -132,6 +140,8 @@ class SpanCalculationInput:
     period: str = "1y"
     spot_override: float | None = None
     volatility_override: float | None = None
+    call_volatility_override: float | None = None
+    put_volatility_override: float | None = None
     time_to_expiry_override: float | None = None
     price_scan_range_override: float | None = None
     volatility_scan_range_override: float | None = None
@@ -195,6 +205,55 @@ def available_tickers(risk_params_file: Path = DEFAULT_RISK_PARAMS_FILE) -> list
     """
     store = _load_risk_params_store(risk_params_file)
     return [t for t in store.tickers() if t not in _NON_EQUITY_TICKERS]
+
+
+def fetch_takasbank_series(ticker: str) -> dict | None:
+    """Bir hisse için Takasbank günlük PC-SPAN XML'inden vade/strike verisini çeker.
+
+    Günlük cache'i (yoksa indirip) hazırlar, sonra sadece bu hisseye ait
+    kısmı döner. XML'de bu hisse yoksa (veri kaynağı erişilemez, hisse
+    opsiyonu yok vb.) None döner -- arayüz bu durumda eski (manuel tarih/
+    strike girişi) akışa nazikçe düşer.
+
+    Returns:
+        {"20260831": {"t":..., "intrRate":..., "psr":..., "vsr":...,
+        "options": [{"k":..., "o":"C"/"P", "v":...}, ...]}, ...} ya da None.
+    """
+    normalized = ticker.upper().strip().removesuffix(".IS")
+    try:
+        _trading_day, cache_path = takasbank_xml.ensure_daily_cache()
+        distilled = json.loads(cache_path.read_text())
+    except Exception:
+        return None
+    return distilled.get("products", {}).get(normalized)
+
+
+def _available_expiries(series: dict) -> list[date]:
+    """fetch_takasbank_series çıktısındaki vade string'lerini (YYYYMMDD)
+    sıralı date listesine çevirir."""
+    dates = []
+    for expiry_str in series:
+        try:
+            dates.append(
+                date(int(expiry_str[:4]), int(expiry_str[4:6]), int(expiry_str[6:8]))
+            )
+        except ValueError:
+            continue
+    return sorted(dates)
+
+
+def _available_strikes(series: dict, expiry: date) -> list[float]:
+    """Bir vadedeki TÜM strike'ları (call+put birleşimi) sıralı döner.
+
+    T/faiz/PSR/VSR seri (vade) bazında ortak olduğu için call'da olup
+    put'ta olmayan (ya da tam tersi) bir strike de listelenir -- implied
+    volatility o taraf için XML'de yoksa uygulama otomatik olarak
+    historical volatility'ye düşer (bkz. run_streamlit).
+    """
+    expiry_data = series.get(expiry.strftime("%Y%m%d"))
+    if not expiry_data:
+        return []
+    return sorted({opt["k"] for opt in expiry_data["options"]})
 
 
 _FRACTION_LABELS = ((0.0, "sabit"), (1 / 3, "1/3 PSR"), (2 / 3, "2/3 PSR"), (1.0, "tam PSR"))
@@ -395,14 +454,33 @@ def compute_span_result(inputs: SpanCalculationInput) -> dict:
 def compute_call_and_put(inputs: SpanCalculationInput) -> dict[str, dict]:
     """Aynı girdilerle hem call hem put için compute_span_result çalıştırır.
 
-    inputs.option_type yok sayılır; hem "call" hem "put" hesaplanır.
+    inputs.option_type yok sayılır; hem "call" hem "put" hesaplanır. Her
+    taraf kendi volatilitesini kullanır: call_volatility_override/
+    put_volatility_override verilmişse o taraf için o kullanılır (ör.
+    Takasbank implied volatility, strike/tipe göre farklı olabilir);
+    verilmemişse ikisi de paylaşımlı volatility_override'a (ya da o da
+    yoksa historical volatility'ye) düşer.
 
     Returns:
         {"call": <compute_span_result çıktısı>, "put": <compute_span_result çıktısı>}
     """
+    call_vol = (
+        inputs.call_volatility_override
+        if inputs.call_volatility_override is not None
+        else inputs.volatility_override
+    )
+    put_vol = (
+        inputs.put_volatility_override
+        if inputs.put_volatility_override is not None
+        else inputs.volatility_override
+    )
     return {
-        "call": compute_span_result(replace(inputs, option_type="call")),
-        "put": compute_span_result(replace(inputs, option_type="put")),
+        "call": compute_span_result(
+            replace(inputs, option_type="call", volatility_override=call_vol)
+        ),
+        "put": compute_span_result(
+            replace(inputs, option_type="put", volatility_override=put_vol)
+        ),
     }
 
 
@@ -820,12 +898,19 @@ def _streamlit_override_row(
 
 
 def run_streamlit() -> None:
-    """Streamlit dashboard: firma + vade + strike gir, call/put min teminatı gör.
+    """Streamlit dashboard: firma seç, vade/strike Takasbank'ın günlük
+    XML'inden gelen GERÇEK mevcut değerlerden seç, call/put min teminatı gör.
 
-    Otomatik çekilen her bileşen (spot, volatilite, PSR, VSR, Extreme
-    Move Multiplier, Extreme Move Covered Fraction, Intra-Commodity
-    Spread Charge, SOM) checkbox ile açılan bir alana manuel değer
-    girerek override edilebilir.
+    Hisse seçilip veriler çekildikten sonra: vade ve strike, Takasbank'ın
+    o günkü PC-SPAN dosyasında gerçekten bulunan değerlerden dropdown ile
+    seçilir (bkz. takasbank_xml.py). T, faiz oranı, PSR, VSR, Extreme Move
+    Multiplier/Covered Fraction ve implied volatility (call/put ayrı ayrı)
+    bu strike/vade için Takasbank'tan otomatik çekilir; Takasbank verisi
+    yoksa (hisse/vade/strike XML'de bulunamazsa) sırasıyla Takasbank PDF'i,
+    yfinance historical volatility ve tarih farkından hesaplanan T'ye
+    nazikçe düşülür. Spot fiyat her zaman yfinance'ten gelir (Takasbank'ın
+    underlying fiyatı kullanılmaz). Otomatik çekilen her bileşen, "Değiştir"
+    işaretlenip manuel bir değer girerek override edilebilir.
     """
     import streamlit as st
 
@@ -850,13 +935,6 @@ def run_streamlit() -> None:
         contracts = st.number_input(
             "Kontrat Sayısı (kısa pozisyon için negatif)", value=-1, step=1
         )
-        risk_free_rate = st.number_input(
-            "Risksiz Faiz Oranı",
-            min_value=0.0,
-            value=0.45,
-            step=0.0001,
-            format="%.4f",
-        )
 
     @st.cache_data(show_spinner=False)
     def _cached_available_tickers(path_str: str) -> list[str]:
@@ -870,28 +948,28 @@ def run_streamlit() -> None:
         st.error(f"Risk parametre dosyası okunamadı: {exc}")
         return
 
-    col1, col2 = st.columns(2)
-    with col1:
-        ticker = st.selectbox(
-            "Hisse (opsiyon verisi olan hisseler)",
-            options=tickers,
-            index=tickers.index("AKBNK") if "AKBNK" in tickers else 0,
-            help=(
-                "Bu liste, seçili risk parametre dosyasında tam opsiyon "
-                "verisi (PSR/VSR/SOM vb.) bulunan hisselerdir -- resmi "
-                "BIST30 endeks listesiyle birebir aynı olmayabilir."
-            ),
-        )
-    with col2:
-        expiry = st.date_input("Vade Tarihi")
+    ticker = st.selectbox(
+        "Hisse (opsiyon verisi olan hisseler)",
+        options=tickers,
+        index=tickers.index("AKBNK") if "AKBNK" in tickers else 0,
+        help=(
+            "Bu liste, seçili risk parametre dosyasında tam opsiyon "
+            "verisi (PSR/VSR/SOM vb.) bulunan hisselerdir -- resmi "
+            "BIST30 endeks listesiyle birebir aynı olmayabilir."
+        ),
+    )
 
     if st.button("Verileri Çek", type="primary"):
         normalized = _normalize_ticker(ticker)
         try:
-            with st.spinner("Fiyat/volatilite ve risk parametreleri çekiliyor..."):
+            with st.spinner(
+                "Fiyat/volatilite, risk parametreleri ve Takasbank verileri çekiliyor "
+                "(ilk çekişte ~10-30 saniye sürebilir)..."
+            ):
                 price_data = data_fetch.get_price_data(normalized)
                 store = _load_risk_params_store(Path(risk_params_file))
                 risk_params = store.get(normalized)
+                takasbank_series = fetch_takasbank_series(normalized)
         except Exception as exc:
             st.error(f"Veri çekilemedi: {exc}")
             st.session_state.pop("fetched", None)
@@ -901,6 +979,7 @@ def run_streamlit() -> None:
                 "spot": price_data.current_price,
                 "volatility": price_data.historical_volatility,
                 "risk_params": risk_params,
+                "takasbank_series": takasbank_series,
             }
 
     fetched = st.session_state.get("fetched")
@@ -909,17 +988,80 @@ def run_streamlit() -> None:
             st.info("Hisse değişti — tekrar 'Verileri Çek'e bas.")
         return
 
-    st.divider()
-    st.subheader("Strike")
-    strike = st.number_input(
-        "Kullanım Fiyatı",
-        min_value=0.0,
-        value=round(fetched["spot"], 4),
-        step=0.0001,
-        format="%.4f",
-    )
+    takasbank_series = fetched.get("takasbank_series")
+    takasbank_info = takasbank_xml.last_update_info()
 
-    auto_tte = (expiry - date.today()).days / 365
+    st.divider()
+    st.subheader("Vade ve Strike")
+
+    if takasbank_series:
+        available_expiries = _available_expiries(takasbank_series)
+        expiry = st.selectbox(
+            "Vade Tarihi",
+            options=available_expiries,
+            format_func=lambda d: d.strftime("%d.%m.%Y"),
+            help="Takasbank'ın güncel dosyasında bu hisse için gerçekten mevcut olan vadeler.",
+        )
+        if takasbank_info:
+            st.caption(
+                f":green[●] Takasbank verisi {takasbank_info['source_date'].strftime('%d.%m.%Y')} "
+                f"tarihli · son güncelleme: {takasbank_info['cached_at'].strftime('%d.%m.%Y %H:%M')}"
+            )
+    else:
+        st.warning(
+            "Bu hisse için Takasbank XML verisi bulunamadı — vade tarihini elle gir. "
+            "T/faiz/PSR/VSR/volatilite otomatik çekilemeyecek, mevcut kaynaklara "
+            "(Takasbank PDF / yfinance historical) düşülecek."
+        )
+        expiry = st.date_input("Vade Tarihi")
+
+    available_strikes = (
+        _available_strikes(takasbank_series, expiry) if takasbank_series else []
+    )
+    if available_strikes:
+        closest_idx = min(
+            range(len(available_strikes)),
+            key=lambda i: abs(available_strikes[i] - fetched["spot"]),
+        )
+        strike = st.selectbox(
+            "Kullanım Fiyatı (Strike)",
+            options=available_strikes,
+            index=closest_idx,
+            help="Takasbank'ın bu vade için gerçekten listelediği strike'lar (güncel fiyata en yakını varsayılan).",
+        )
+    else:
+        strike = st.number_input(
+            "Kullanım Fiyatı",
+            min_value=0.0,
+            value=round(fetched["spot"], 4),
+            step=0.0001,
+            format="%.4f",
+        )
+
+    # Bu strike/vade için Takasbank'tan T/faiz/PSR/VSR/IV çek -- call ve put
+    # ayrı ayrı (implied volatility strike+tipe göre farklı olabilir; T/faiz/
+    # PSR/VSR ikisinde de aynıdır, hangisi bulunduysa ondan alınır).
+    takasbank_call = takasbank_put = None
+    if takasbank_series:
+        try:
+            takasbank_call = takasbank_xml.get_option_params(
+                fetched["ticker"], expiry, strike, "call"
+            )
+        except (KeyError, ValueError):
+            pass
+        try:
+            takasbank_put = takasbank_xml.get_option_params(
+                fetched["ticker"], expiry, strike, "put"
+            )
+        except (KeyError, ValueError):
+            pass
+    takasbank_common = takasbank_call or takasbank_put
+
+    auto_tte = (
+        takasbank_common.time_to_expiry
+        if takasbank_common
+        else (expiry - date.today()).days / 365
+    )
     auto_tte_display = round(auto_tte, 4)
     # bkz. _streamlit_override_row -- aynı sebeple "value" değil session_state
     # kullanıyoruz (Değiştir ilk işaretlendiğinde 0'a sıfırlanma bug'ı).
@@ -929,10 +1071,13 @@ def run_streamlit() -> None:
     c1, c2, c3 = st.columns([2.2, 1.5, 1])
     with c1:
         st.markdown("**Vadeye Kalan Süre (T, yıl)**")
-        st.caption(
-            f"Otomatik: {_format_natural(auto_tte)} "
-            f"({(expiry - date.today()).days} gün / 365)  ·  _hesaplanan_"
-        )
+        if takasbank_common:
+            st.caption(f"Otomatik: {_format_natural(auto_tte)}  ·  _Takasbank XML_")
+        else:
+            st.caption(
+                f"Otomatik: {_format_natural(auto_tte)} "
+                f"({(expiry - date.today()).days} gün / 365)  ·  _hesaplanan_"
+            )
     with c3:
         override_tte = st.checkbox("Değiştir", key="tte_chk")
     with c2:
@@ -957,51 +1102,83 @@ def run_streamlit() -> None:
 
     st.subheader("Otomatik Çekilen Değerler (istersen değiştir)")
     rp = fetched["risk_params"]
+
     spot = _streamlit_override_row(
         st, "Güncel Fiyat (Spot)", fetched["spot"], "spot", source="yfinance", live=True
     )
-    volatility = _streamlit_override_row(
-        st,
-        "Historical Volatility",
-        fetched["volatility"],
-        "vol",
-        source="yfinance, geçmiş fiyatlardan hesaplanan",
+
+    # PSR/VSR/faiz: Takasbank'ın GÜNLÜK XML'i varsa oradan (canlı, bu vadeye
+    # özel), yoksa Takasbank PDF'inden (statik referans) -- ikisi de aynı
+    # kaynaktan (Takasbank) geldiği için kullanıcıya hangisi kullanıldığı
+    # etiketle belli edilir.
+    if takasbank_common:
+        psr_auto, psr_source = takasbank_common.price_scan_range, "Takasbank XML"
+        vsr_auto, vsr_source = takasbank_common.volatility_scan_range, "Takasbank XML"
+        emm_auto, emm_source = takasbank_common.extreme_move_multiplier, "Takasbank XML"
+        emcf_auto, emcf_source = (
+            takasbank_common.extreme_move_covered_fraction,
+            "Takasbank XML",
+        )
+        rate_auto, rate_source = takasbank_common.risk_free_rate, "Takasbank XML"
+    else:
+        psr_auto, psr_source = rp.price_scan_range, "Takasbank dökümanı (PDF)"
+        vsr_auto, vsr_source = rp.volatility_scan_range, "Takasbank dökümanı (PDF)"
+        emm_auto, emm_source = rp.extreme_move_multiplier, "Takasbank dökümanı (PDF)"
+        emcf_auto, emcf_source = (
+            rp.extreme_move_covered_fraction,
+            "Takasbank dökümanı (PDF)",
+        )
+        rate_auto, rate_source = 0.45, "varsayılan (Takasbank XML bulunamadı)"
+
+    risk_free_rate = _streamlit_override_row(
+        st, "Risksiz Faiz Oranı", rate_auto, "rate", source=rate_source
     )
     psr = _streamlit_override_row(
-        st,
-        "Price Scan Range (PSR)",
-        rp.price_scan_range,
-        "psr",
-        source="Takasbank dökümanı",
-        decimals=4,
+        st, "Price Scan Range (PSR)", psr_auto, "psr", source=psr_source, decimals=4
     )
     vsr = _streamlit_override_row(
-        st,
-        "Volatility Scan Range (VSR)",
-        rp.volatility_scan_range,
-        "vsr",
-        source="Takasbank dökümanı",
+        st, "Volatility Scan Range (VSR)", vsr_auto, "vsr", source=vsr_source
     )
     emm = _streamlit_override_row(
-        st,
-        "Extreme Move Multiplier",
-        rp.extreme_move_multiplier,
-        "emm",
-        source="Takasbank dökümanı",
+        st, "Extreme Move Multiplier", emm_auto, "emm", source=emm_source
     )
     emcf = _streamlit_override_row(
-        st,
-        "Extreme Move Covered Fraction",
-        rp.extreme_move_covered_fraction,
-        "emcf",
-        source="Takasbank dökümanı",
+        st, "Extreme Move Covered Fraction", emcf_auto, "emcf", source=emcf_source
     )
     som = _streamlit_override_row(
         st,
         "Short Option Minimum (SOM)",
         rp.short_option_minimum,
         "som",
-        source="Takasbank dökümanı",
+        source="Takasbank dökümanı (PDF)",
+    )
+
+    st.markdown("**Volatilite** _(call ve put için ayrı — implied volatility strike/tipe göre farklı olabilir)_")
+    if takasbank_call:
+        call_vol_auto, call_vol_source = (
+            takasbank_call.implied_volatility,
+            "Takasbank XML (implied vol)",
+        )
+    else:
+        call_vol_auto, call_vol_source = (
+            fetched["volatility"],
+            "yfinance historical (IV bulunamadı)",
+        )
+    if takasbank_put:
+        put_vol_auto, put_vol_source = (
+            takasbank_put.implied_volatility,
+            "Takasbank XML (implied vol)",
+        )
+    else:
+        put_vol_auto, put_vol_source = (
+            fetched["volatility"],
+            "yfinance historical (IV bulunamadı)",
+        )
+    call_volatility = _streamlit_override_row(
+        st, "Volatilite — Call", call_vol_auto, "call_vol", source=call_vol_source
+    )
+    put_volatility = _streamlit_override_row(
+        st, "Volatilite — Put", put_vol_auto, "put_vol", source=put_vol_source
     )
 
     st.divider()
@@ -1033,7 +1210,8 @@ def run_streamlit() -> None:
             risk_params_file=Path(risk_params_file),
             risk_free_rate=risk_free_rate,
             spot_override=spot,
-            volatility_override=volatility,
+            call_volatility_override=call_volatility,
+            put_volatility_override=put_volatility,
             time_to_expiry_override=time_to_expiry_override,
             price_scan_range_override=psr,
             volatility_scan_range_override=vsr,
