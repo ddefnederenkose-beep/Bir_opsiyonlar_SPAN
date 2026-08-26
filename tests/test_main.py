@@ -332,15 +332,27 @@ def test_compute_span_result_includes_scenario_table(fake_price_data):
     assert scenarios.attrs["worst_scenario_no"] == worst_row["Sen."]
 
 
-def test_available_tickers_excludes_non_equity_symbols():
-    """available_tickers, USDTRY/XU030 gibi hisse olmayan sembolleri hariç tutmalı."""
+def test_available_tickers_includes_supported_index_and_fx_symbols():
+    """USDTRY (USDTRYKP opsiyonu) ve XU030 (XU030D opsiyonu) artık DESTEKLENİYOR.
+
+    PDF'te bu TEMEL isimleriyle geçerler; günlük XML'deki gerçek pfCode'ları
+    farklıdır (bkz. takasbank_xml._XML_PFCODE_ALIASES) ama kullanıcıya/PDF'e
+    hep temel isim gösterilir.
+    """
     tickers = available_tickers(FIXTURE_PATH)
 
     assert "AKBNK" in tickers
     assert "GARAN" in tickers
-    assert "USDTRY" not in tickers
-    assert "XU030" not in tickers
+    assert "USDTRY" in tickers
+    assert "XU030" in tickers
     assert tickers == sorted(tickers)
+
+
+def test_non_equity_tickers_still_excludes_remaining_unsupported_symbols():
+    """Henüz opsiyon serisi desteklenmeyen döviz/endeks sembolleri hâlâ hariç."""
+    assert "EURTRY" in main._NON_EQUITY_TICKERS
+    assert "USDTRY" not in main._NON_EQUITY_TICKERS  # artık destekleniyor
+    assert "XU030" not in main._NON_EQUITY_TICKERS  # artık destekleniyor
 
 
 def test_compute_span_result_prefers_takasbank_spot_over_yfinance(
@@ -495,6 +507,7 @@ def test_compute_span_result_prefers_takasbank_time_to_expiry(
             extreme_move_multiplier=3.0,
             extreme_move_covered_fraction=0.32,
             market_price=4.85,
+            contract_size=100.0,
             source_date=date.today(),
         )
 
@@ -552,6 +565,7 @@ def test_compute_span_result_time_to_expiry_override_beats_takasbank(
             extreme_move_multiplier=3.0,
             extreme_move_covered_fraction=0.32,
             market_price=4.85,
+            contract_size=100.0,
             source_date=date.today(),
         )
 

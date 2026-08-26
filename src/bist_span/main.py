@@ -60,10 +60,13 @@ from bist_span.span_engine import (
     generate_risk_scenarios,
 )
 
-# Takasbank'ın per-ticker PSR/VSR listesinde geçen ama gerçek bir hisse
-# olmayan (döviz/endeks vadeli işlem) semboller -- hisse seçim listesinden
-# ve senaryo tablosu başlıklarından hariç tutulur.
-_NON_EQUITY_TICKERS = {"USDTRY", "EURTRY", "XU030", "X10XB", "XLBNK", "XSD25"}
+# Takasbank'ın per-ticker PSR/VSR listesinde geçen ama HENÜZ desteklenmeyen
+# (opsiyon serisi bu uygulamada işlenmeyen) döviz/endeks vadeli işlem
+# sembolleri -- hisse seçim listesinden ve senaryo tablosu başlıklarından
+# hariç tutulur. XU030 (BIST30 endeksi) ve USDTRY (USD/TRY), PDF'teki bu
+# TEMEL isimleriyle burada; günlük XML'deki GERÇEK opsiyon pfCode'ları
+# farklıdır (XU030D, USDTRYKP) -- bkz. takasbank_xml._XML_PFCODE_ALIASES.
+_NON_EQUITY_TICKERS = {"EURTRY", "X10XB", "XLBNK", "XSD25"}
 
 # Projedeki en güncel Takasbank risk parametre dosyası. Takasbank yeni bir
 # "Risk Parametrelerinin Güncellenmesi" mektubu yayınladığında bu dosyayı
@@ -237,12 +240,13 @@ def fetch_takasbank_series(ticker: str) -> dict | None:
         "options": [{"k":..., "o":"C"/"P", "v":...}, ...]}, ...} ya da None.
     """
     normalized = ticker.upper().strip().removesuffix(".IS")
+    xml_pfcode = takasbank_xml.to_xml_pfcode(normalized)
     try:
         _trading_day, cache_path = takasbank_xml.ensure_daily_cache()
         distilled = json.loads(cache_path.read_text())
     except Exception:
         return None
-    return distilled.get("products", {}).get(normalized)
+    return distilled.get("products", {}).get(xml_pfcode)
 
 
 def _available_expiries(series: dict) -> list[date]:
@@ -420,7 +424,27 @@ def compute_span_result(inputs: SpanCalculationInput) -> dict:
 
     # historical volatility hesabı için (ve spot'un Takasbank'ta
     # bulunamadığı durumlarda fallback için) yfinance'e hâlâ ihtiyaç var.
-    price_data = data_fetch.get_price_data(ticker, period=inputs.period)
+    # AMA artık ZORUNLU değil: USDTRY/XU030 gibi bazı ürünler yfinance'te
+    # standart bir hisse sembolü olarak bulunmaz -- Takasbank zaten her
+    # şeyi (spot/T/contract_size) sağlayabildiği için burada patlamak
+    # yerine None'a düşüp devam ediyoruz.
+    try:
+        price_data = data_fetch.get_price_data(ticker, period=inputs.period)
+    except Exception:
+        price_data = None
+
+    # Bu strike/vade/tip için Takasbank'ın kendi parametrelerini BİR KEZ
+    # çekiyoruz -- hem T hem contract_size (kontrat çarpanı) buradan
+    # gelir (spot ile aynı öncelik mantığı, bkz. aşağısı). Hisse
+    # opsiyonlarında çarpan hep 100'dür ama SABİT DEĞİLDİR -- ör. XU030D
+    # (BIST30 endeks opsiyonu) 10, USDTRYKP (USD/TRY opsiyonu) 1 kullanır
+    # (bkz. takasbank_xml.TakasbankOptionParams.contract_size docstring'i).
+    try:
+        takasbank_params = takasbank_xml.get_option_params(
+            ticker, inputs.expiry, inputs.strike, inputs.option_type
+        )
+    except Exception:
+        takasbank_params = None
 
     # Spot fiyat ARTIK ANA KAYNAK olarak Takasbank'ın günlük XML'inden
     # gelir (yfinance sadece Takasbank'ta bu hisse/gün bulunamazsa
@@ -432,13 +456,22 @@ def compute_span_result(inputs: SpanCalculationInput) -> dict:
         try:
             spot = takasbank_xml.get_spot_price(ticker).price
         except Exception:
+            if price_data is None:
+                raise ValueError(
+                    f"{ticker}: spot fiyat ne Takasbank'tan ne yfinance'ten "
+                    "alınabildi -- spot_override ile elle ver."
+                )
             spot = price_data.current_price
 
-    volatility = (
-        inputs.volatility_override
-        if inputs.volatility_override is not None
-        else price_data.historical_volatility
-    )
+    if inputs.volatility_override is not None:
+        volatility = inputs.volatility_override
+    elif price_data is not None:
+        volatility = price_data.historical_volatility
+    else:
+        raise ValueError(
+            f"{ticker}: volatilite ne yfinance historical'dan alınabildi "
+            "(sembol yfinance'te bulunamadı) -- volatility_override ile elle ver."
+        )
 
     store = _load_risk_params_store(inputs.risk_params_file)
     risk_params = _apply_risk_params_overrides(store.get(ticker), inputs)
@@ -456,14 +489,22 @@ def compute_span_result(inputs: SpanCalculationInput) -> dict:
         # takvim-günü yaklaşıklığının Fark/Scanning Risk'i belirgin ölçüde
         # kaydırdığı doğrulandı. Takasbank'ta bu strike/vade/tip yoksa
         # (ör. hisse/opsiyon XML'de bulunamıyorsa) takvim gününe düşülür.
-        try:
-            time_to_expiry = takasbank_xml.get_option_params(
-                ticker, inputs.expiry, inputs.strike, inputs.option_type
-            ).time_to_expiry
-        except Exception:
+        if takasbank_params is not None:
+            time_to_expiry = takasbank_params.time_to_expiry
+        else:
             time_to_expiry = (inputs.expiry - date.today()).days / 365
         if time_to_expiry <= 0:
             raise ValueError(f"Vade tarihi ({inputs.expiry}) bugünden ileride olmalı")
+
+    # contract_size (kontrat başına dayanak varlık miktarı): Takasbank'ta
+    # bu strike/vade/tip bulunduysa ORADAN, bulunamazsa OptionPosition'ın
+    # kendi varsayılanından (100 -- hisse opsiyonlarının tamamı için doğru)
+    # gelir.
+    contract_size_kwargs = (
+        {"contract_size": int(takasbank_params.contract_size)}
+        if takasbank_params is not None
+        else {}
+    )
 
     position = OptionPosition(
         ticker=ticker,
@@ -472,6 +513,7 @@ def compute_span_result(inputs: SpanCalculationInput) -> dict:
         contracts=inputs.contracts,
         time_to_expiry=time_to_expiry,
         risk_free_rate=inputs.risk_free_rate,
+        **contract_size_kwargs,
     )
 
     # intra_commodity_spread_charge risk_params'tan OTOMATİK alınmaz --
@@ -1070,7 +1112,16 @@ def run_streamlit() -> None:
                 "Fiyat/volatilite, risk parametreleri ve Takasbank verileri çekiliyor "
                 "(ilk çekişte ~10-30 saniye sürebilir)..."
             ):
-                price_data = data_fetch.get_price_data(normalized)
+                # yfinance -- artık SADECE fallback (spot: Takasbank yoksa;
+                # volatility: Takasbank implied vol yoksa). USDTRY/XU030
+                # gibi bazı ürünler yfinance'te standart bir hisse sembolü
+                # olarak bulunmaz -- Takasbank zaten her şeyi sağlıyorsa bu
+                # hiç sorun olmamalı, bu yüzden burada patlarsa (fetch
+                # tamamen) durmak yerine None'a düşüp devam ediyoruz.
+                try:
+                    price_data = data_fetch.get_price_data(normalized)
+                except Exception:
+                    price_data = None
                 store = _load_risk_params_store(Path(risk_params_file))
                 risk_params = store.get(normalized)
                 takasbank_series = fetch_takasbank_series(normalized)
@@ -1080,8 +1131,8 @@ def run_streamlit() -> None:
         else:
             st.session_state["fetched"] = {
                 "ticker": normalized,
-                "spot": price_data.current_price,
-                "volatility": price_data.historical_volatility,
+                "spot": price_data.current_price if price_data else None,
+                "volatility": price_data.historical_volatility if price_data else None,
                 "risk_params": risk_params,
                 "takasbank_series": takasbank_series,
             }
@@ -1132,13 +1183,29 @@ def run_streamlit() -> None:
             if takasbank_info["is_final"]
             else "gün içi ara güncelleme — daha yeni bir dosya çıktıkça otomatik yenilenir"
         )
+        # "son güncelleme" olarak Takasbank'ın bu belgeyi KENDİ sunucusunda
+        # yayınladığı an gösterilir (published_at) -- bizim onu ne zaman
+        # indirdiğimiz (cached_at) DEĞİL; bu ikisi karışınca kullanıcı
+        # ekranın bayat kaldığını sanıyordu (bkz. proje sohbet geçmişi).
+        # Eski cache'lerde published_at henüz yoksa (bu alan eklenmeden
+        # önce yazılmışsa) cached_at'e nazikçe düşülür.
+        published_at = takasbank_info.get("published_at")
+        if published_at:
+            update_line = (
+                f"Takasbank'ın yayınladığı belge: "
+                f"{published_at.strftime('%d.%m.%Y %H:%M')}"
+            )
+        else:
+            update_line = (
+                f"son güncelleme (bizim çekişimiz): "
+                f"{takasbank_info['cached_at'].strftime('%d.%m.%Y %H:%M')}"
+            )
         st.caption(
             f":green[●] Spot, taban/piyasa fiyatı, T, faiz oranı, PSR, VSR, "
             f"Extreme Move ve implied volatility [Takasbank'ın günlük PC-SPAN "
             f"dosyasından]({source_link}) otomatik çekiliyor · veri tarihi: "
-            f"{takasbank_info['source_date'].strftime('%d.%m.%Y')} · son güncelleme: "
-            f"{takasbank_info['cached_at'].strftime('%d.%m.%Y %H:%M')} ({durum}). "
-            "Aşağıda 'Değiştir' ile her alanı elle üzerine yazabilirsin."
+            f"{takasbank_info['source_date'].strftime('%d.%m.%Y')} · {update_line} "
+            f"({durum}). Aşağıda 'Değiştir' ile her alanı elle üzerine yazabilirsin."
         )
     else:
         st.caption(

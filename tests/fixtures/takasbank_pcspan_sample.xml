@@ -55,6 +55,36 @@
                 <p>0.0</p>
             </phy>
         </phyPf>
+        <phyPf>
+            <pfId>19991</pfId>
+            <pfCode>USDTRY</pfCode>
+            <name>USDTRY LEVEL 0</name>
+            <valueMeth>EQTY</valueMeth>
+            <phy>
+                <cId>2183</cId>
+                <p>48.1025</p>
+            </phy>
+        </phyPf>
+        <phyPf>
+            <pfId>18287</pfId>
+            <pfCode>USDTRYKP</pfCode>
+            <name>PHY DEL 1000 USDTRY LEVEL 0</name>
+            <valueMeth>EQTY</valueMeth>
+            <phy>
+                <cId>479</cId>
+                <p>48102.5</p>
+            </phy>
+        </phyPf>
+        <phyPf>
+            <pfId>18289</pfId>
+            <pfCode>XU030D</pfCode>
+            <name>BIST30 INDEX LEVEL 0</name>
+            <valueMeth>EQTY</valueMeth>
+            <phy>
+                <cId>481</cId>
+                <p>16971.54</p>
+            </phy>
+        </phyPf>
         <oofPf>
             <oopPf>
                 <pfId>14779</pfId>
@@ -75,12 +105,14 @@
                         <o>P</o>
                         <p>0.01</p>
                         <v>0.454073</v>
+                        <cvf>100.0</cvf>
                     </opt>
                     <opt>
                         <k>56.0</k>
                         <o>C</o>
                         <p>1.20</p>
                         <v>0.439181</v>
+                        <cvf>100.0</cvf>
                     </opt>
                 </series>
                 <series>
@@ -97,14 +129,15 @@
                         <o>C</o>
                         <p>2.5</p>
                         <v>0.42</v>
+                        <cvf>100.0</cvf>
                     </opt>
                 </series>
             </oopPf>
             <oopPf>
-                <pfId>99999</pfId>
-                <pfCode>USDTRY</pfCode>
-                <name>USD/TRY</name>
-                <valueMeth>FX</valueMeth>
+                <pfId>99998</pfId>
+                <pfCode>TESTFUT</pfCode>
+                <name>TEST FUTURES (NON-EQTY)</name>
+                <valueMeth>FUT</valueMeth>
                 <series>
                     <pe>20260831</pe>
                     <t>0.012438</t>
@@ -114,6 +147,52 @@
                         <priceScanPct>11.0</priceScanPct>
                         <volScanPct>0.20</volScanPct>
                     </scanRate>
+                </series>
+            </oopPf>
+            <oopPf>
+                <pfId>18287</pfId>
+                <pfCode>USDTRYKP</pfCode>
+                <name>PHY DEL 1000 USDTRY LEVEL 0</name>
+                <valueMeth>EQTY</valueMeth>
+                <series>
+                    <pe>20260831</pe>
+                    <t>0.012438</t>
+                    <intrRate><val>0.38</val></intrRate>
+                    <scanRate>
+                        <r>1</r>
+                        <priceScanPct>11.0</priceScanPct>
+                        <volScanPct>0.32</volScanPct>
+                    </scanRate>
+                    <opt>
+                        <k>48500.0</k>
+                        <o>C</o>
+                        <p>36.6</p>
+                        <v>0.050678</v>
+                        <cvf>1.0</cvf>
+                    </opt>
+                </series>
+            </oopPf>
+            <oopPf>
+                <pfId>18289</pfId>
+                <pfCode>XU030D</pfCode>
+                <name>BIST30 INDEX LEVEL 0</name>
+                <valueMeth>EQTY</valueMeth>
+                <series>
+                    <pe>20260831</pe>
+                    <t>0.012438</t>
+                    <intrRate><val>0.38</val></intrRate>
+                    <scanRate>
+                        <r>1</r>
+                        <priceScanPct>11.4</priceScanPct>
+                        <volScanPct>0.32</volScanPct>
+                    </scanRate>
+                    <opt>
+                        <k>14250.0</k>
+                        <o>P</o>
+                        <p>7.14</p>
+                        <v>0.241765</v>
+                        <cvf>10.0</cvf>
+                    </opt>
                 </series>
             </oopPf>
         </oofPf>

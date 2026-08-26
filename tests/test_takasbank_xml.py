@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -36,10 +36,34 @@ def test_parse_global_extreme_move_reads_point_15_from_equity_group():
 
 
 def test_parse_products_only_includes_equity_products():
-    """Sadece valueMeth=EQTY ürünler dahil edilmeli (USDTRY=FX hariç tutulmalı)."""
+    """Sadece valueMeth=EQTY ürünler dahil edilmeli (TESTFUT=FUT hariç tutulmalı)."""
     products, _spots = tbx._parse_products_and_spots(FIXTURE_PATH)
     assert "AKBNK" in products
-    assert "USDTRY" not in products
+    assert "TESTFUT" not in products
+
+
+def test_parse_products_includes_index_and_fx_options_tagged_eqty():
+    """XU030D (endeks) ve USDTRYKP (döviz) de valueMeth=EQTY ise dahil edilmeli.
+
+    Gerçek Takasbank verisinde doğrulanmıştır: bu ürünler valueMeth=EQTY
+    etiketiyle geliyor (isme rağmen "hisse" anlamında değil, "standart
+    opsiyon değerleme metodolojisi" anlamında) -- filtre valueMeth'e
+    bakar, ticker adına değil.
+    """
+    products, _spots = tbx._parse_products_and_spots(FIXTURE_PATH)
+    assert "XU030D" in products
+    assert "USDTRYKP" in products
+
+
+def test_parse_products_captures_contract_size_from_cvf():
+    """cvf (kontrat çarpanı) hisse dışı ürünlerde 100 DEĞİLDİR -- doğru okunmalı."""
+    products, _spots = tbx._parse_products_and_spots(FIXTURE_PATH)
+    akbnk_opt = products["AKBNK"]["20260831"]["options"][0]
+    xu030d_opt = products["XU030D"]["20260831"]["options"][0]
+    usdtrykp_opt = products["USDTRYKP"]["20260831"]["options"][0]
+    assert akbnk_opt["cvf"] == pytest.approx(100.0)
+    assert xu030d_opt["cvf"] == pytest.approx(10.0)
+    assert usdtrykp_opt["cvf"] == pytest.approx(1.0)
 
 
 def test_parse_products_psr_divided_by_100_but_vsr_not():
@@ -121,6 +145,7 @@ def test_get_option_params_end_to_end(tmp_path, monkeypatch):
     assert params.extreme_move_multiplier == pytest.approx(3.0)
     assert params.extreme_move_covered_fraction == pytest.approx(0.32)
     assert params.market_price == pytest.approx(1.20)
+    assert params.contract_size == pytest.approx(100.0)
     assert params.source_date == trading_day
 
 
@@ -149,6 +174,59 @@ def test_get_spot_price_unknown_ticker_raises(tmp_path, monkeypatch):
 
     with pytest.raises(KeyError, match="YOKHISSE"):
         tbx.get_spot_price("YOKHISSE", today=trading_day)
+
+
+def test_to_xml_pfcode_maps_known_aliases_and_passes_through_others():
+    assert tbx.to_xml_pfcode("XU030") == "XU030D"
+    assert tbx.to_xml_pfcode("USDTRY") == "USDTRYKP"
+    assert tbx.to_xml_pfcode("AKBNK") == "AKBNK"  # eşleşme yoksa aynen döner
+
+
+def test_get_spot_price_resolves_alias_to_real_option_pfcode(tmp_path, monkeypatch):
+    """get_spot_price('USDTRY') PDF/temel isim -- ama gerçek opsiyon serisi
+    (ve strike'larla AYNI ölçekteki spot) USDTRYKP'nin phyPf'inde. Fixture'da
+    ikisi FARKLI değerlerde (48.1025 vs 48102.5) -- alias doğru
+    uygulanmazsa yanlış (1000x küçük) spot dönerdi."""
+    monkeypatch.setattr(tbx, "DISTILLED_DIR", tmp_path)
+    trading_day = date(2026, 8, 25)
+    distilled = tbx.build_distilled_cache(FIXTURE_PATH)
+    (tmp_path / f"{trading_day.strftime('%y%m%d')}.json").write_text(
+        __import__("json").dumps(distilled)
+    )
+
+    spot = tbx.get_spot_price("USDTRY", today=trading_day)
+    assert spot.ticker == "USDTRY"  # kullanıcıya hep TEMEL isim döner
+    assert spot.price == pytest.approx(48102.5)  # USDTRYKP'nin (strike'larla tutarlı) fiyatı
+
+    spot_index = tbx.get_spot_price("XU030", today=trading_day)
+    assert spot_index.price == pytest.approx(16971.54)
+
+
+def test_get_option_params_resolves_alias_for_index_and_fx(tmp_path, monkeypatch):
+    """get_option_params('XU030', ...) / ('USDTRY', ...) gerçek XML pfCode'una
+    (XU030D/USDTRYKP) çevrilmeli ve doğru contract_size'ı taşımalı."""
+    monkeypatch.setattr(tbx, "DISTILLED_DIR", tmp_path)
+    trading_day = date(2026, 8, 25)
+    distilled = tbx.build_distilled_cache(FIXTURE_PATH)
+    (tmp_path / f"{trading_day.strftime('%y%m%d')}.json").write_text(
+        __import__("json").dumps(distilled)
+    )
+
+    fx = tbx.get_option_params(
+        "USDTRY", date(2026, 8, 31), 48500.0, "call", today=trading_day
+    )
+    assert fx.ticker == "USDTRY"
+    assert fx.market_price == pytest.approx(36.6)
+    assert fx.contract_size == pytest.approx(1.0)
+    assert fx.price_scan_range == pytest.approx(0.11)
+
+    index = tbx.get_option_params(
+        "XU030", date(2026, 8, 31), 14250.0, "put", today=trading_day
+    )
+    assert index.ticker == "XU030"
+    assert index.market_price == pytest.approx(7.14)
+    assert index.contract_size == pytest.approx(10.0)
+    assert index.price_scan_range == pytest.approx(0.114)
 
 
 def test_get_option_params_unknown_ticker_raises_clear_error(tmp_path, monkeypatch):
@@ -219,6 +297,7 @@ def _seed_distilled_cache(
     source_file: str,
     is_final: bool,
     age_seconds: float,
+    published_at: str | None = None,
 ) -> Path:
     """Testler için diskte hazır bir damıtılmış cache dosyası kurar.
 
@@ -241,6 +320,7 @@ def _seed_distilled_cache(
                 "spot_prices": {},
                 "source_file": source_file,
                 "is_final": is_final,
+                "published_at": published_at,
             }
         )
     )
@@ -299,7 +379,9 @@ def test_ensure_daily_cache_intraday_rechecks_and_keeps_same_file(tmp_path, monk
     )
     before_mtime = cache_path.stat().st_mtime
 
-    monkeypatch.setattr(tbx, "_list_directory_files", lambda d: ["TAKASINT_x-005.zip"])
+    monkeypatch.setattr(
+        tbx, "_list_directory_files", lambda d: {"TAKASINT_x-005.zip": datetime(2026, 8, 26, 15, 10)}
+    )
 
     def _boom(*args, **kwargs):
         raise AssertionError("aynı dosya varken XML tekrar indirilmemeli")
@@ -328,7 +410,10 @@ def test_ensure_daily_cache_intraday_rebuilds_when_newer_file_appears(tmp_path, 
     monkeypatch.setattr(
         tbx,
         "_list_directory_files",
-        lambda d: ["TAKASINT_x-005.zip", "TAKASEOD_x-001.zip"],
+        lambda d: {
+            "TAKASINT_x-005.zip": datetime(2026, 8, 26, 15, 10),
+            "TAKASEOD_x-001.zip": datetime(2026, 8, 26, 20, 35),
+        },
     )
     fake_xml_path = tmp_path / "fake.xml"
     fake_xml_path.write_text("<spanFile/>")
@@ -357,6 +442,9 @@ def test_ensure_daily_cache_intraday_rebuilds_when_newer_file_appears(tmp_path, 
     assert cached["source_file"] == "TAKASEOD_x-001.zip"
     assert cached["is_final"] is True
     assert cached["spot_prices"]["AKBNK"] == pytest.approx(74.3)
+    # Takasbank'ın KENDİ yayın zamanı (20:35) kaydedilmeli -- bizim
+    # indirdiğimiz an DEĞİL (bkz. proje sohbet geçmişi).
+    assert cached["published_at"] == "2026-08-26T20:35:00"
 
 
 def test_last_update_info_reports_is_final(tmp_path, monkeypatch):
@@ -367,6 +455,25 @@ def test_last_update_info_reports_is_final(tmp_path, monkeypatch):
     info = tbx.last_update_info()
     assert info["source_date"] == trading_day
     assert info["is_final"] is False
+    # published_at hiç yazılmamış (eski/basit cache) -- None'a düşmeli, patlamamalı.
+    assert info["published_at"] is None
+
+
+def test_last_update_info_reports_published_at_when_present(tmp_path, monkeypatch):
+    """published_at, cached_at'ten (bizim fetch zamanımız) FARKLI ve doğru dönmeli."""
+    trading_day = date(2026, 8, 26)
+    _seed_distilled_cache(
+        tmp_path,
+        monkeypatch,
+        trading_day,
+        "TAKASINT_x-012.zip",
+        False,
+        age_seconds=5,
+        published_at="2026-08-26T16:10:00",
+    )
+    info = tbx.last_update_info()
+    assert info["published_at"] == datetime(2026, 8, 26, 16, 10, 0)
+    assert info["source_file"] == "TAKASINT_x-012.zip"
 
 
 @pytest.mark.network

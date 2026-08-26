@@ -71,7 +71,7 @@ import re
 import time
 import zipfile
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -90,6 +90,27 @@ _EQUITY_SCAN_GROUP_R = "1"
 _EXTREME_MOVE_POINT = "15"
 
 _HTTP_TIMEOUT = 30
+
+# Bazı endeks/döviz ürünlerinde, Takasbank'ın PDF risk parametre
+# dosyasındaki (SOM/Intra-Commodity Spread Charge kaynağı) TEMEL sembol
+# (ör. "XU030", "USDTRY") ile günlük XML'deki GERÇEK opsiyon ürün kodu
+# (pfCode, ör. "XU030D", "USDTRYKP") FARKLIDIR -- ikisi aynı dayanak
+# varlığın opsiyonlarını temsil eder, sadece iki farklı Takasbank
+# yayınında iki farklı isimle geçer (gerçek XML'de doğrulanmıştır: PSR/
+# VSR değerleri PDF'teki "temel" isimle birebir eşleşiyor). Kullanıcıya
+# ve PDF'e (risk_params) HER ZAMAN temel ismi gösteriyoruz/kullanıyoruz;
+# günlük XML'e sorarken sessizce gerçek pfCode'a çeviriyoruz. Düz
+# "USDTRY" ve "XU030" pfCode'ları günlük XML'de SADECE dayanak varlık
+# (phyPf, referans fiyat) olarak var -- kendi opsiyon serileri yok.
+_XML_PFCODE_ALIASES = {
+    "XU030": "XU030D",
+    "USDTRY": "USDTRYKP",
+}
+
+
+def to_xml_pfcode(ticker: str) -> str:
+    """PDF/görüntü ismini (varsa bir eşleşme varsa) gerçek XML pfCode'una çevirir."""
+    return _XML_PFCODE_ALIASES.get(ticker, ticker)
 
 
 @dataclass
@@ -114,6 +135,14 @@ class TakasbankOptionParams:
             piyasa/uzlaşma fiyatı (<opt><p>). SPAN'in 16 senaryo
             hesabında "taban" olarak kullanılır (bkz. span_engine.
             calculate_scenario_pnl'in base_price parametresi).
+        contract_size: Kontrat başına dayanak varlık miktarı (XML'in
+            <opt><cvf> alanından, hazır). Hisse opsiyonlarında 100,
+            ama SABİT DEĞİL -- ör. XU030D (BIST30 endeks opsiyonu) 10,
+            USDTRYKP (USD/TRY opsiyonu) 1 kullanır. calculate_scenario_pnl
+            içinde P&L, (şoklu fiyat - taban) * contracts * contract_size
+            formülüyle hesaplanır -- bu alan yanlışsa teminat da yanlış
+            çıkar (bkz. proje sohbet geçmişi: hisse opsiyonlarında ×100
+            eksikliği daha önce tam olarak bu sınıf bir buga yol açmıştı).
         source_date: Bu verinin ait olduğu Takasbank iş günü.
     """
 
@@ -129,6 +158,7 @@ class TakasbankOptionParams:
     extreme_move_multiplier: float
     extreme_move_covered_fraction: float
     market_price: float
+    contract_size: float
     source_date: date
 
 
@@ -167,11 +197,36 @@ def find_latest_trading_day(
     )
 
 
-def _list_directory_files(d: date) -> list[str]:
-    """Bir gün klasöründeki .zip dosya adlarını (belgede geçtiği sırayla) döner."""
+_IIS_DIR_ENTRY_RE = re.compile(
+    r'([A-Za-z]+, [A-Za-z]+ \d{1,2}, \d{4}\s+\d{1,2}:\d{2} [AP]M)'
+    r'\s+\d+\s*<A HREF="[^"]*">(TAKAS[^<]+\.zip)</A>'
+)
+_IIS_TIMESTAMP_FORMAT = "%A, %B %d, %Y %I:%M %p"
+
+
+def _list_directory_files(d: date) -> dict[str, datetime]:
+    """Bir gün klasöründeki .zip dosyalarını, Takasbank'ın kendi sunucu
+    dizin listesinde gösterdiği YAYIN zaman damgasıyla birlikte döner.
+
+    Bu zaman damgası, dosyanın Takasbank tarafından o klasöre ne zaman
+    yüklendiğini gösterir -- BİZİM onu ne zaman indirdiğimizi değil
+    (o ayrı bir kavram, bkz. ensure_daily_cache/last_update_info'daki
+    "cached_at"). UI'da "son güncelleme" olarak asıl gösterilmesi gereken
+    budur.
+
+    Returns:
+        {dosya_adı: yayın_zamanı} -- IIS'in dizin listesindeki HTML'den
+        ayrıştırılır (ör. "Wednesday, August 26, 2026  4:10 PM").
+    """
     resp = requests.get(folder_url(d), timeout=_HTTP_TIMEOUT)
     resp.raise_for_status()
-    return re.findall(r'HREF="[^"]*/(TAKAS[^"]+\.zip)"', resp.text)
+    files: dict[str, datetime] = {}
+    for ts_text, filename in _IIS_DIR_ENTRY_RE.findall(resp.text):
+        try:
+            files[filename] = datetime.strptime(ts_text.strip(), _IIS_TIMESTAMP_FORMAT)
+        except ValueError:
+            continue
+    return files
 
 
 def _pick_best_file(filenames: list[str]) -> str:
@@ -311,9 +366,21 @@ def _parse_products_and_spots(xml_path: Path) -> tuple[dict, dict]:
                     o = opt.findtext("o")
                     v = opt.findtext("v")
                     p = opt.findtext("p")
+                    # cvf: kontrat başına dayanak varlık miktarı (hisse
+                    # opsiyonlarında 100, XU030D'de 10, USDTRYKP'de 1 --
+                    # SABİT VARSAYILAMAZ, her opt kendi cvf'ini taşır).
+                    # Alan yoksa (beklenmeyen durum) 100'e düşülür --
+                    # bugüne kadarki tüm hisse-opsiyonu davranışıyla aynı.
+                    cvf = opt.findtext("cvf")
                     if k and o and v and p is not None:
                         options.append(
-                            {"k": float(k), "o": o, "v": float(v), "p": float(p)}
+                            {
+                                "k": float(k),
+                                "o": o,
+                                "v": float(v),
+                                "p": float(p),
+                                "cvf": float(cvf) if cvf else 100.0,
+                            }
                         )
 
                 by_expiry[expiry_str] = {
@@ -353,11 +420,21 @@ def _distilled_cache_path(d: date) -> Path:
 _RECHECK_AFTER_SECONDS = 15 * 60  # gün içi (INT) cache'ler bu süre sonra tekrar kontrol edilir
 
 
-def _write_distilled_cache(cache_path: Path, distilled: dict, source_file: str) -> None:
+def _write_distilled_cache(
+    cache_path: Path,
+    distilled: dict,
+    source_file: str,
+    published_at: datetime | None = None,
+) -> None:
     payload = {
         **distilled,
         "source_file": source_file,
         "is_final": source_file.startswith("TAKASEOD"),
+        # Takasbank'ın bu dosyayı KENDİ sunucusunda yayınladığı zaman (IIS
+        # dizin listesinden) -- BİZİM onu indirdiğimiz an değil. Bilinmiyorsa
+        # (ör. testlerde) None kalır, last_update_info bu durumda sadece
+        # cached_at'e (bizim fetch zamanımız) düşer.
+        "published_at": published_at.isoformat() if published_at else None,
     }
     DISTILLED_DIR.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(payload, ensure_ascii=False))
@@ -405,8 +482,8 @@ def ensure_daily_cache(today: date | None = None) -> tuple[date, Path]:
             return trading_day, cache_path
 
         try:
-            files = _list_directory_files(trading_day)
-            best_file = _pick_best_file(files)
+            files_map = _list_directory_files(trading_day)
+            best_file = _pick_best_file(list(files_map.keys()))
         except Exception:
             # Klasör listesi şu an çekilemedi (geçici ağ sorunu vb.) --
             # elimizdeki (bayat olabilecek) cache'i kullanmaya devam et,
@@ -422,14 +499,14 @@ def ensure_daily_cache(today: date | None = None) -> tuple[date, Path]:
         # Gün içinde daha güncel/nihai bir dosya yayınlanmış -- yeniden kur.
         xml_path = _download_and_extract_xml(trading_day, best_file, force=True)
         distilled = build_distilled_cache(xml_path)
-        _write_distilled_cache(cache_path, distilled, best_file)
+        _write_distilled_cache(cache_path, distilled, best_file, files_map.get(best_file))
         return trading_day, cache_path
 
-    files = _list_directory_files(trading_day)
-    best_file = _pick_best_file(files)
+    files_map = _list_directory_files(trading_day)
+    best_file = _pick_best_file(list(files_map.keys()))
     xml_path = _download_and_extract_xml(trading_day, best_file)
     distilled = build_distilled_cache(xml_path)
-    _write_distilled_cache(cache_path, distilled, best_file)
+    _write_distilled_cache(cache_path, distilled, best_file, files_map.get(best_file))
     return trading_day, cache_path
 
 
@@ -437,10 +514,20 @@ def last_update_info() -> dict | None:
     """Diskteki en güncel damıtılmış cache'in tarihini döner (UI'da göstermek için).
 
     Returns:
-        {"source_date": date, "cached_at": datetime, "is_final": bool}
-        ya da hiç cache yoksa None. "is_final" False ise, cache bir INTRADAY
-        (gün içi ara) dosyadan üretilmiştir -- Takasbank'ın o günün NİHAİ
-        (EOD) dosyası henüz yayınlanmamış olabilir (bkz. ensure_daily_cache).
+        {"source_date": date, "cached_at": datetime, "published_at": datetime | None,
+        "source_file": str | None, "is_final": bool} ya da hiç cache yoksa None.
+
+        "cached_at": BİZİM bu veriyi yerel diske ne zaman yazdığımız (fetch
+            zamanımız) -- Takasbank'ın dosyayı ne zaman yayınladığıyla
+            KARIŞTIRILMAMALI (bkz. proje sohbet geçmişi: önceki UI metni
+            bunu "son güncelleme" diye gösterip yanıltıyordu).
+        "published_at": Takasbank'ın bu dosyayı KENDİ sunucusuna yüklediği
+            an (IIS dizin listesinden okunur). Eski cache'lerde (bu alan
+            eklenmeden önce yazılmış) None olabilir -- UI bu durumda
+            cached_at'e düşer.
+        "is_final" False ise, cache bir INTRADAY (gün içi ara) dosyadan
+            üretilmiştir -- Takasbank'ın o günün NİHAİ (EOD) dosyası henüz
+            yayınlanmamış olabilir (bkz. ensure_daily_cache).
     """
     if not DISTILLED_DIR.exists():
         return None
@@ -450,15 +537,24 @@ def last_update_info() -> dict | None:
     latest = cache_files[-1]
     d = date(2000 + int(latest.stem[:2]), int(latest.stem[2:4]), int(latest.stem[4:6]))
     try:
-        is_final = json.loads(latest.read_text()).get("is_final", False)
+        cached_json = json.loads(latest.read_text())
     except (json.JSONDecodeError, OSError):
-        is_final = False
+        cached_json = {}
+    is_final = cached_json.get("is_final", False)
+    source_file = cached_json.get("source_file")
+    published_at_raw = cached_json.get("published_at")
+    published_at = None
+    if published_at_raw:
+        try:
+            published_at = datetime.fromisoformat(published_at_raw)
+        except ValueError:
+            published_at = None
     return {
         "source_date": d,
         "is_final": is_final,
-        "cached_at": __import__("datetime").datetime.fromtimestamp(
-            latest.stat().st_mtime
-        ),
+        "source_file": source_file,
+        "published_at": published_at,
+        "cached_at": datetime.fromtimestamp(latest.stat().st_mtime),
     }
 
 
@@ -489,18 +585,19 @@ def get_option_params(
         ValueError: Strike/tip kombinasyonu bulunamazsa.
     """
     normalized_ticker = ticker.upper().strip().removesuffix(".IS")
+    xml_pfcode = to_xml_pfcode(normalized_ticker)
     trading_day, cache_path = ensure_daily_cache(today)
     distilled = json.loads(cache_path.read_text())
 
     products = distilled["products"]
-    if normalized_ticker not in products:
+    if xml_pfcode not in products:
         raise KeyError(
             f"{normalized_ticker}, {trading_day} tarihli Takasbank dosyasında "
             f"bulunamadı (opsiyonu olmayabilir)"
         )
 
     expiry_str = expiry.strftime("%Y%m%d")
-    by_expiry = products[normalized_ticker]
+    by_expiry = products[xml_pfcode]
     if expiry_str not in by_expiry:
         available = ", ".join(sorted(by_expiry))
         raise KeyError(
@@ -527,6 +624,7 @@ def get_option_params(
                     "extreme_move_covered_fraction"
                 ],
                 market_price=opt["p"],
+                contract_size=opt.get("cvf", 100.0),
                 source_date=trading_day,
             )
 
@@ -563,17 +661,23 @@ def get_spot_price(ticker: str, today: date | None = None) -> TakasbankSpotPrice
         KeyError: Hisse dosyada bulunamazsa.
     """
     normalized_ticker = ticker.upper().strip().removesuffix(".IS")
+    # ÖNEMLİ: opsiyonların strike'ları hangi pfCode'un ölçeğindeyse (ör.
+    # USDTRYKP: ~48000'ler, 1000×USDTRY), spot da AYNI ölçekten gelmeli --
+    # yoksa Black-Scholes'a strike ile tutarsız bir spot girer (spot/strike
+    # oranı 1000× kayar, tüm fiyatlama anlamsızlaşır). Bu yüzden burada da
+    # aynı pfCode alias'ı uygulanıyor (bkz. to_xml_pfcode).
+    xml_pfcode = to_xml_pfcode(normalized_ticker)
     trading_day, cache_path = ensure_daily_cache(today)
     distilled = json.loads(cache_path.read_text())
 
     spot_prices = distilled.get("spot_prices", {})
-    if normalized_ticker not in spot_prices:
+    if xml_pfcode not in spot_prices:
         raise KeyError(
             f"{normalized_ticker}, {trading_day} tarihli Takasbank dosyasında "
             f"spot fiyatı bulunamadı"
         )
     return TakasbankSpotPrice(
         ticker=normalized_ticker,
-        price=spot_prices[normalized_ticker],
+        price=spot_prices[xml_pfcode],
         source_date=trading_day,
     )
