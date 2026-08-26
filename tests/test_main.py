@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from bist_span import data_fetch, main
+from bist_span import data_fetch, main, takasbank_xml
 from bist_span.main import (
     SpanCalculationInput,
     _normalize_ticker,
@@ -26,7 +26,17 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "takasbank_span_sample.pdf"
 
 @pytest.fixture
 def fake_price_data(monkeypatch):
-    """data_fetch.get_price_data'yı ağa gitmeden sahte bir PriceData ile değiştirir."""
+    """data_fetch.get_price_data'yı ağa gitmeden sahte bir PriceData ile değiştirir.
+
+    Ayrıca takasbank_xml.get_spot_price'ı da (bulunamadı hatası fırlatacak
+    şekilde) sahteler -- spot artık ÖNCELİKLE Takasbank'tan geldiği için,
+    bu olmadan testler gerçek ağa gidip günden güne değişen gerçek
+    fiyatlarla deterministik olmaktan çıkardı. Bu fixture'ı kullanan
+    testler böylece bilinçli olarak "Takasbank'ta bulunamadı, yfinance'e
+    düşüldü" senaryosunu test eder; Takasbank-öncelikli senaryo ayrı
+    testlerde (bkz. test_compute_span_result_prefers_takasbank_spot)
+    açıkça mock'lanır.
+    """
 
     def _fake_get_price_data(ticker: str, period: str = "1y"):
         return data_fetch.PriceData(
@@ -37,8 +47,15 @@ def fake_price_data(monkeypatch):
             as_of=date.today(),
         )
 
+    def _fake_get_spot_price_missing(ticker: str, today=None):
+        raise KeyError(f"{ticker} test ortamında Takasbank'ta yok")
+
     monkeypatch.setattr(data_fetch, "get_price_data", _fake_get_price_data)
     monkeypatch.setattr(main.data_fetch, "get_price_data", _fake_get_price_data)
+    monkeypatch.setattr(takasbank_xml, "get_spot_price", _fake_get_spot_price_missing)
+    monkeypatch.setattr(
+        main.takasbank_xml, "get_spot_price", _fake_get_spot_price_missing
+    )
 
 
 @pytest.mark.parametrize(
@@ -312,3 +329,126 @@ def test_available_tickers_excludes_non_equity_symbols():
     assert "USDTRY" not in tickers
     assert "XU030" not in tickers
     assert tickers == sorted(tickers)
+
+
+def test_compute_span_result_prefers_takasbank_spot_over_yfinance(
+    fake_price_data, monkeypatch
+):
+    """Spot fiyat artık ÖNCELİKLE Takasbank'tan gelmeli, yfinance'e değil.
+
+    fake_price_data fixture'ı Takasbank'ı "bulunamadı" yapıyor; burada
+    açıkça Takasbank'ın GERÇEK bir değer döndürdüğü senaryoyu mock'layıp,
+    yfinance'in (62.0) DEĞİL, Takasbank'ın (74.3) kullanıldığını doğruluyoruz.
+    """
+
+    def _fake_takasbank_spot(ticker, today=None):
+        return takasbank_xml.TakasbankSpotPrice(
+            ticker=ticker, price=74.3, source_date=date.today()
+        )
+
+    monkeypatch.setattr(main.takasbank_xml, "get_spot_price", _fake_takasbank_spot)
+
+    inputs = SpanCalculationInput(
+        ticker="AKBNK",
+        strike=65,
+        option_type="call",
+        contracts=-1,
+        expiry=date.today() + timedelta(days=30),
+        risk_params_file=FIXTURE_PATH,
+    )
+    result = compute_span_result(inputs)
+    assert result["spot"] == pytest.approx(74.3)  # Takasbank, yfinance'in (62.0) önünde
+
+
+def test_compute_span_result_falls_back_to_yfinance_when_takasbank_missing(
+    fake_price_data,
+):
+    """Takasbank'ta bu hisse/gün bulunamazsa spot yfinance'e (fallback) düşmeli."""
+    inputs = SpanCalculationInput(
+        ticker="AKBNK",
+        strike=65,
+        option_type="call",
+        contracts=-1,
+        expiry=date.today() + timedelta(days=30),
+        risk_params_file=FIXTURE_PATH,
+    )
+    result = compute_span_result(inputs)
+    assert result["spot"] == 62.0  # fake_price_data fixture Takasbank'ı bulunamadı yapıyor
+
+
+def test_compute_span_result_spot_override_beats_both_sources(
+    fake_price_data, monkeypatch
+):
+    """spot_override verilmişse, Takasbank da yfinance de değil, o kullanılmalı."""
+
+    def _fake_takasbank_spot(ticker, today=None):
+        return takasbank_xml.TakasbankSpotPrice(
+            ticker=ticker, price=74.3, source_date=date.today()
+        )
+
+    monkeypatch.setattr(main.takasbank_xml, "get_spot_price", _fake_takasbank_spot)
+
+    inputs = SpanCalculationInput(
+        ticker="AKBNK",
+        strike=65,
+        option_type="call",
+        contracts=-1,
+        expiry=date.today() + timedelta(days=30),
+        risk_params_file=FIXTURE_PATH,
+        spot_override=100.0,
+    )
+    result = compute_span_result(inputs)
+    assert result["spot"] == 100.0
+
+
+def test_compute_span_result_uses_theoretical_base_price_by_default(fake_price_data):
+    """market_price_override verilmezse, taban fiyat teorik Black-Scholes olmalı."""
+    inputs = SpanCalculationInput(
+        ticker="AKBNK",
+        strike=65,
+        option_type="call",
+        contracts=-1,
+        expiry=date.today() + timedelta(days=30),
+        risk_params_file=FIXTURE_PATH,
+    )
+    result = compute_span_result(inputs)
+    assert result["market_price"] is None
+    assert result["scenarios"].attrs["current_price"] == pytest.approx(
+        result["scenarios"].attrs["theoretical_price"]
+    )
+
+
+def test_compute_span_result_uses_market_price_when_given(fake_price_data):
+    """market_price_override verilirse, 16 senaryonun "Fark" tabanı o olmalı
+    (teorik fiyattan farklı olsa bile)."""
+    inputs = SpanCalculationInput(
+        ticker="AKBNK",
+        strike=65,
+        option_type="call",
+        contracts=-1,
+        expiry=date.today() + timedelta(days=30),
+        risk_params_file=FIXTURE_PATH,
+        market_price_override=1.72,
+    )
+    result = compute_span_result(inputs)
+    assert result["market_price"] == 1.72
+    assert result["scenarios"].attrs["current_price"] == pytest.approx(1.72)
+    # Teorik fiyat referans olarak hâlâ ayrıca duruyor.
+    assert result["scenarios"].attrs["theoretical_price"] != pytest.approx(1.72)
+
+
+def test_compute_call_and_put_routes_market_price_per_side(fake_price_data):
+    """compute_call_and_put, call/put market fiyatlarını doğru tarafa yönlendirmeli."""
+    inputs = SpanCalculationInput(
+        ticker="AKBNK",
+        strike=65,
+        option_type="call",  # yok sayılır
+        contracts=-1,
+        expiry=date.today() + timedelta(days=30),
+        risk_params_file=FIXTURE_PATH,
+        call_market_price_override=1.72,
+        put_market_price_override=1.03,
+    )
+    results = main.compute_call_and_put(inputs)
+    assert results["call"]["market_price"] == 1.72
+    assert results["put"]["market_price"] == 1.03

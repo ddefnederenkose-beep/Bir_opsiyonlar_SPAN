@@ -35,6 +35,26 @@
         </pointDef>
     </definitions>
     <exchange>
+        <phyPf>
+            <pfId>18261</pfId>
+            <pfCode>AKBNK</pfCode>
+            <name>AKBANK</name>
+            <valueMeth>EQTY</valueMeth>
+            <phy>
+                <cId>454</cId>
+                <p>74.3</p>
+            </phy>
+        </phyPf>
+        <phyPf>
+            <pfId>1</pfId>
+            <pfCode>AAPBNP</pfCode>
+            <name>APPLE ISSUED BY BNP</name>
+            <valueMeth>EQTY</valueMeth>
+            <phy>
+                <cId>1</cId>
+                <p>0.0</p>
+            </phy>
+        </phyPf>
         <oofPf>
             <oopPf>
                 <pfId>14779</pfId>

@@ -225,11 +225,12 @@ def calculate_scenario_pnl(
     spot: float,
     volatility: float,
     scenario: dict,
+    base_price: float | None = None,
 ) -> float:
     """Tek bir senaryo altında pozisyonun kâr/zararını hesaplar.
 
     Senaryodaki price_shock ve vol_shock'u spot/volatility'ye uygulayıp
-    black_scholes_price ile şoklu fiyatı bulur, güncel fiyatla farkını
+    black_scholes_price ile şoklu fiyatı bulur, TABAN fiyatla farkını
     kontrat sayısı VE kontrat büyüklüğü (position.contract_size) ile
     çarpar. black_scholes_price birim (pay başına) fiyat döndürdüğü
     için, kontrat büyüklüğü çarpanı olmadan P&L 100 kat (VİOP'ta
@@ -242,19 +243,29 @@ def calculate_scenario_pnl(
         spot: Güncel dayanak fiyatı.
         volatility: Güncel volatilite.
         scenario: generate_risk_scenarios çıktısındaki tek bir senaryo.
+        base_price: "Fark" hesabının taban fiyatı. Verilmezse (None),
+            spot/volatility ile TEORİK Black-Scholes fiyatı hesaplanıp
+            taban olarak kullanılır (eski davranış, Excel referansıyla
+            doğrulanan testler bunu kullanır). Verilirse (ör. Takasbank
+            XML'in opt/p alanındaki GERÇEK piyasa/uzlaşma fiyatı), teorik
+            hesap yerine DOĞRUDAN o değer taban olarak kullanılır -- bu,
+            sonuçları Takasbank'ın kendi PC-SPAN Risk Array ekranına daha
+            yakınlaştırır çünkü hem girdiler hem taban fiyat aynı
+            kaynaktan (Takasbank) gelmiş olur.
 
     Returns:
         Senaryo altındaki P&L, kontrat başına toplam TL cinsinden
         (kısa pozisyonlarda fiyat artışı negatif P&L üretir).
     """
-    current_price = black_scholes_price(
-        spot,
-        position.strike,
-        position.time_to_expiry,
-        position.risk_free_rate,
-        volatility,
-        position.option_type,
-    )
+    if base_price is None:
+        base_price = black_scholes_price(
+            spot,
+            position.strike,
+            position.time_to_expiry,
+            position.risk_free_rate,
+            volatility,
+            position.option_type,
+        )
     shocked_spot = apply_price_shock(spot, scenario["price_shock"])
     shocked_volatility = apply_vol_shock(volatility, scenario["vol_shock"])
     shocked_price = black_scholes_price(
@@ -266,7 +277,7 @@ def calculate_scenario_pnl(
         position.option_type,
     )
 
-    pnl = (shocked_price - current_price) * position.contracts * position.contract_size
+    pnl = (shocked_price - base_price) * position.contracts * position.contract_size
     return pnl * scenario.get("covered_fraction", 1.0)
 
 
@@ -311,6 +322,7 @@ def calculate_span_margin(
     intra_commodity_spread_charge: float = 0.0,
     delivery_risk: float = 0.0,
     inter_commodity_spread_credit: float = 0.0,
+    base_price: float | None = None,
 ) -> dict:
     """Final SPAN başlangıç teminatını hesaplar.
 
@@ -341,6 +353,11 @@ def calculate_span_margin(
         delivery_risk: Teslimat riski bileşeni (varsayılan 0).
         inter_commodity_spread_credit: Emtialar arası spread kredisi
             (varsayılan 0, tek pozisyon için genelde 0).
+        base_price: 16 senaryonun "Fark" hesabında kullanılacak taban
+            fiyat. Verilmezse (None) her senaryoda teorik Black-Scholes
+            hesaplanır (bkz. calculate_scenario_pnl). Verilirse (ör.
+            Takasbank XML'in opt/p'si), o sabit değer taban olarak
+            kullanılır.
 
     Returns:
         Hesabın ara adımlarını da içeren dict:
@@ -357,7 +374,7 @@ def calculate_span_margin(
         extreme_move_covered_fraction=risk_params.extreme_move_covered_fraction,
     )
     scenario_pnls = [
-        calculate_scenario_pnl(position, spot, volatility, scenario)
+        calculate_scenario_pnl(position, spot, volatility, scenario, base_price)
         for scenario in scenarios
     ]
 

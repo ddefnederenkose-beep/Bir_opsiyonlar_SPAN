@@ -318,3 +318,81 @@ def test_calculate_scenario_pnl_applies_vol_shock_multiplicatively():
     pnl = span_engine.calculate_scenario_pnl(position, 301.50, 0.3021, scenario)
     # Excel: Sen. 1 (fiyat sabit, vol yukarı) -> Kısa K/Z = -194.6821341
     assert pnl == pytest.approx(-194.6821341, abs=0.05)
+
+
+def test_calculate_scenario_pnl_uses_theoretical_base_price_by_default():
+    """base_price verilmezse (None), taban teorik Black-Scholes fiyatı olmalı."""
+    position = OptionPosition(
+        ticker="THYAO",
+        strike=280,
+        option_type="call",
+        contracts=-1,
+        time_to_expiry=0.1096,
+        risk_free_rate=0.35,
+    )
+    scenario = {"price_shock": 0.0, "vol_shock": 0.0, "is_extreme": False}
+    # Fiyat/vol şoksuz senaryoda PnL, taban ile aynı fiyat farkı sıfır
+    # olduğu için 0 olmalı (teorik taban = şoksuz senaryonun ta kendisi).
+    pnl = span_engine.calculate_scenario_pnl(position, 301.50, 0.3021, scenario)
+    assert pnl == pytest.approx(0.0, abs=1e-6)
+
+
+def test_calculate_scenario_pnl_uses_explicit_base_price_when_given():
+    """base_price verilirse (ör. Takasbank'ın gerçek piyasa fiyatı), teorik
+    hesap yerine DOĞRUDAN o kullanılmalı."""
+    position = OptionPosition(
+        ticker="THYAO",
+        strike=280,
+        option_type="call",
+        contracts=-1,
+        time_to_expiry=0.1096,
+        risk_free_rate=0.35,
+    )
+    scenario = {"price_shock": 0.0, "vol_shock": 0.0, "is_extreme": False}
+    theoretical = span_engine.black_scholes_price(
+        301.50, 280, 0.1096, 0.35, 0.3021, "call"
+    )
+    market_price = theoretical - 5.0  # gerçek piyasa fiyatı teorikten farklı olsun
+    pnl = span_engine.calculate_scenario_pnl(
+        position, 301.50, 0.3021, scenario, base_price=market_price
+    )
+    # Şoksuz senaryoda şoklu fiyat = teorik; taban = market_price olduğu
+    # için fark tam olarak (teorik - market_price) = 5.0 olmalı.
+    expected = (theoretical - market_price) * position.contracts * position.contract_size
+    assert pnl == pytest.approx(expected)
+    assert pnl == pytest.approx(-500.0)  # -1 kontrat * 100 * 5.0
+
+
+def test_calculate_span_margin_passes_base_price_through():
+    """calculate_span_margin, base_price'ı tüm 16 senaryoya doğru aktarmalı."""
+    position = OptionPosition(
+        ticker="THYAO",
+        strike=280,
+        option_type="call",
+        contracts=-1,
+        time_to_expiry=0.1096,
+        risk_free_rate=0.35,
+    )
+    risk_params = RiskParams(
+        ticker="THYAO",
+        price_scan_range=0.134,
+        volatility_scan_range=0.28,
+        extreme_move_multiplier=3.0,
+        extreme_move_covered_fraction=0.32,
+        intra_commodity_spread_charge=0.0,
+        short_option_minimum=1640.0,
+    )
+    theoretical = span_engine.black_scholes_price(
+        301.50, 280, 0.1096, 0.35, 0.3021, "call"
+    )
+    result_theoretical = span_engine.calculate_span_margin(
+        position=position, spot=301.50, volatility=0.3021, risk_params=risk_params
+    )
+    result_market = span_engine.calculate_span_margin(
+        position=position,
+        spot=301.50,
+        volatility=0.3021,
+        risk_params=risk_params,
+        base_price=theoretical,  # teoriğe eşit market fiyatı verilirse aynı sonucu vermeli
+    )
+    assert result_market["scan_risk"] == pytest.approx(result_theoretical["scan_risk"])

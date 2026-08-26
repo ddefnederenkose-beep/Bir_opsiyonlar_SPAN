@@ -108,6 +108,14 @@ class SpanCalculationInput:
             tarafın volatilitesi olarak (volatility_override yerine)
             kullanılır. Streamlit arayüzü bunları Takasbank XML'inden
             gelen implied volatility ile doldurur.
+        market_price_override, call_market_price_override, put_market_price_override:
+            16 SPAN senaryosundaki "Fark" hesabının TABAN fiyatı (bkz.
+            span_engine.calculate_scenario_pnl'in base_price parametresi).
+            Verilmezse (üçü de None), taban olarak kendi Black-Scholes
+            hesabımızın TEORİK fiyatı kullanılır (eski davranış). Verilirse
+            (ör. Takasbank XML'in opt/p'si -- gerçek piyasa/uzlaşma fiyatı),
+            teorik hesap yerine doğrudan o kullanılır. call/put versiyonları
+            volatility_override'daki gibi tarafa özel önceliklidir.
         time_to_expiry_override: Verilirse (expiry - bugün).gün/365'ten
             hesaplanan T yerine bu değer (yıl cinsinden) doğrudan kullanılır.
             Takvim tarihi her zaman TAM gün sayısı verir (ör. 37/365 =
@@ -142,6 +150,9 @@ class SpanCalculationInput:
     volatility_override: float | None = None
     call_volatility_override: float | None = None
     put_volatility_override: float | None = None
+    market_price_override: float | None = None
+    call_market_price_override: float | None = None
+    put_market_price_override: float | None = None
     time_to_expiry_override: float | None = None
     price_scan_range_override: float | None = None
     volatility_scan_range_override: float | None = None
@@ -281,16 +292,29 @@ def _scenario_description(
 
 
 def _build_scenario_table(
-    position: OptionPosition, spot: float, volatility: float, risk_params: RiskParams
+    position: OptionPosition,
+    spot: float,
+    volatility: float,
+    risk_params: RiskParams,
+    base_price: float | None = None,
 ) -> pd.DataFrame:
     """SPAN'in 16 risk senaryosunu, kullanıcının Excel'iyle (THYAO_SPAN_Hesaplama)
     BİREBİR AYNI sütun yapısında bir tabloya döker: Sen., Açıklama, Fiyat
     Çarpanı, Vol Yönü, S_yeni, IV_yeni, {Call|Put} Fiyatı, Fark, Kısa K/Z (TL).
 
+    Args:
+        base_price: "Fark"/"Kısa K/Z" hesabının taban fiyatı (ör. Takasbank
+            XML'in opt/p'si -- gerçek piyasa fiyatı). Verilmezse (None),
+            spot/volatility ile hesaplanan TEORİK Black-Scholes fiyatı
+            taban olarak kullanılır.
+
     Scanning Risk (bkz. span_engine.scanning_risk), bu 16 K/Z'nin en
     kötüsünden (en büyük zarardan) hesaplanır -- Excel'deki "Aktif
-    Senaryo #" değeri df.attrs["worst_scenario_no"]'da, o anki (şoksuz)
-    opsiyon fiyatı df.attrs["current_price"]'ta saklanır.
+    Senaryo #" değeri df.attrs["worst_scenario_no"]'da saklanır.
+    df.attrs["current_price"], fiilen KULLANILAN taban fiyattır (market
+    varsa market, yoksa teorik); df.attrs["theoretical_price"] her zaman
+    teorik Black-Scholes fiyatıdır (karşılaştırma/referans amaçlı, market
+    fiyat kullanılsa bile).
     """
     scenarios = generate_risk_scenarios(
         spot=spot,
@@ -300,7 +324,7 @@ def _build_scenario_table(
         extreme_move_multiplier=risk_params.extreme_move_multiplier,
         extreme_move_covered_fraction=risk_params.extreme_move_covered_fraction,
     )
-    current_price = black_scholes_price(
+    theoretical_price = black_scholes_price(
         spot,
         position.strike,
         position.time_to_expiry,
@@ -308,11 +332,14 @@ def _build_scenario_table(
         volatility,
         position.option_type,
     )
+    effective_base = base_price if base_price is not None else theoretical_price
     price_column = "Call Fiyatı" if position.option_type == "call" else "Put Fiyatı"
 
     rows = []
     for i, scenario in enumerate(scenarios, start=1):
-        pnl = calculate_scenario_pnl(position, spot, volatility, scenario)
+        pnl = calculate_scenario_pnl(
+            position, spot, volatility, scenario, base_price=effective_base
+        )
         # apply_price_shock/apply_vol_shock -- calculate_scenario_pnl'in
         # kullandığı AYNI fonksiyonlar (span_engine'den paylaşılan), böylece
         # burada gösterilen S_yeni/IV_yeni gerçek P&L hesabıyla her zaman
@@ -353,14 +380,15 @@ def _build_scenario_table(
                 "S_yeni": round(shocked_spot, 4),
                 "IV_yeni": round(shocked_volatility, 6),
                 price_column: round(shocked_price, 6),
-                "Fark": round(shocked_price - current_price, 6),
+                "Fark": round(shocked_price - effective_base, 6),
                 "Kısa K/Z (TL)": round(pnl, 4),
             }
         )
     df = pd.DataFrame(rows)
     worst_idx = df["Kısa K/Z (TL)"].idxmin()
     df.attrs["worst_scenario_no"] = int(df.loc[worst_idx, "Sen."])
-    df.attrs["current_price"] = current_price
+    df.attrs["current_price"] = effective_base
+    df.attrs["theoretical_price"] = theoretical_price
     return df
 
 
@@ -383,12 +411,22 @@ def compute_span_result(inputs: SpanCalculationInput) -> dict:
     """
     ticker = _normalize_ticker(inputs.ticker)
 
+    # historical volatility hesabı için (ve spot'un Takasbank'ta
+    # bulunamadığı durumlarda fallback için) yfinance'e hâlâ ihtiyaç var.
     price_data = data_fetch.get_price_data(ticker, period=inputs.period)
-    spot = (
-        inputs.spot_override
-        if inputs.spot_override is not None
-        else price_data.current_price
-    )
+
+    # Spot fiyat ARTIK ANA KAYNAK olarak Takasbank'ın günlük XML'inden
+    # gelir (yfinance sadece Takasbank'ta bu hisse/gün bulunamazsa
+    # fallback olarak kullanılır). Bkz. proje sohbet geçmişi -- bu bilinçli
+    # bir karar, spot'un artık yfinance'ten gelmesi İSTENMİYOR.
+    if inputs.spot_override is not None:
+        spot = inputs.spot_override
+    else:
+        try:
+            spot = takasbank_xml.get_spot_price(ticker).price
+        except Exception:
+            spot = price_data.current_price
+
     volatility = (
         inputs.volatility_override
         if inputs.volatility_override is not None
@@ -431,15 +469,24 @@ def compute_span_result(inputs: SpanCalculationInput) -> dict:
         else 0.0
     )
 
+    # market_price_override: 16 senaryonun "Fark" hesabında taban fiyat
+    # olarak kullanılır (ör. Takasbank XML'in opt/p'si). Verilmezse (None),
+    # span_engine kendi teorik Black-Scholes fiyatını taban alır (eski
+    # davranış). Bkz. SpanCalculationInput docstring'i.
+    market_price = inputs.market_price_override
+
     span_result = calculate_span_margin(
         position=position,
         spot=spot,
         volatility=volatility,
         risk_params=risk_params,
         intra_commodity_spread_charge=intra_commodity_spread_charge,
+        base_price=market_price,
     )
 
-    scenarios = _build_scenario_table(position, spot, volatility, risk_params)
+    scenarios = _build_scenario_table(
+        position, spot, volatility, risk_params, base_price=market_price
+    )
 
     return {
         "spot": spot,
@@ -448,6 +495,7 @@ def compute_span_result(inputs: SpanCalculationInput) -> dict:
         "time_to_expiry": time_to_expiry,
         "span": span_result,
         "scenarios": scenarios,
+        "market_price": market_price,  # None ise taban teoriktir
     }
 
 
@@ -455,31 +503,49 @@ def compute_call_and_put(inputs: SpanCalculationInput) -> dict[str, dict]:
     """Aynı girdilerle hem call hem put için compute_span_result çalıştırır.
 
     inputs.option_type yok sayılır; hem "call" hem "put" hesaplanır. Her
-    taraf kendi volatilitesini kullanır: call_volatility_override/
-    put_volatility_override verilmişse o taraf için o kullanılır (ör.
-    Takasbank implied volatility, strike/tipe göre farklı olabilir);
-    verilmemişse ikisi de paylaşımlı volatility_override'a (ya da o da
-    yoksa historical volatility'ye) düşer.
+    taraf kendi volatilitesini ve taban fiyatını kullanır:
+    call_volatility_override/put_volatility_override ve
+    call_market_price_override/put_market_price_override verilmişse o
+    taraf için ONLAR kullanılır (ör. Takasbank implied volatility/piyasa
+    fiyatı, strike/tipe göre farklı olabilir); verilmemişse ikisi de
+    paylaşımlı volatility_override/market_price_override'a (ya da onlar
+    da yoksa historical volatility/teorik Black-Scholes fiyatına) düşer.
 
     Returns:
         {"call": <compute_span_result çıktısı>, "put": <compute_span_result çıktısı>}
     """
-    call_vol = (
-        inputs.call_volatility_override
-        if inputs.call_volatility_override is not None
-        else inputs.volatility_override
+
+    def _resolve(shared: float | None, call_specific: float | None, put_specific: float | None):
+        call_val = call_specific if call_specific is not None else shared
+        put_val = put_specific if put_specific is not None else shared
+        return call_val, put_val
+
+    call_vol, put_vol = _resolve(
+        inputs.volatility_override,
+        inputs.call_volatility_override,
+        inputs.put_volatility_override,
     )
-    put_vol = (
-        inputs.put_volatility_override
-        if inputs.put_volatility_override is not None
-        else inputs.volatility_override
+    call_price, put_price = _resolve(
+        inputs.market_price_override,
+        inputs.call_market_price_override,
+        inputs.put_market_price_override,
     )
     return {
         "call": compute_span_result(
-            replace(inputs, option_type="call", volatility_override=call_vol)
+            replace(
+                inputs,
+                option_type="call",
+                volatility_override=call_vol,
+                market_price_override=call_price,
+            )
         ),
         "put": compute_span_result(
-            replace(inputs, option_type="put", volatility_override=put_vol)
+            replace(
+                inputs,
+                option_type="put",
+                volatility_override=put_vol,
+                market_price_override=put_price,
+            )
         ),
     }
 
@@ -726,6 +792,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Short Option Minimum'u manuel override eder (TL)",
     )
     parser.add_argument(
+        "--call-base-price",
+        type=float,
+        default=None,
+        dest="call_market_price_override",
+        help=(
+            "Call için 16 senaryonun 'Fark' hesabında taban fiyat (ör. "
+            "Takasbank'ın gerçek piyasa fiyatı). Verilmezse teorik "
+            "Black-Scholes fiyatı taban alınır."
+        ),
+    )
+    parser.add_argument(
+        "--put-base-price",
+        type=float,
+        default=None,
+        dest="put_market_price_override",
+        help="Put için 16 senaryonun 'Fark' hesabında taban fiyat (bkz. --call-base-price).",
+    )
+    parser.add_argument(
         "--hide-scenarios",
         action="store_true",
         help="16 SPAN senaryosu + P&L dökümünü çıktıdan gizler",
@@ -754,6 +838,8 @@ def run_cli(argv: list[str] | None = None) -> None:
         extreme_move_covered_fraction_override=args.extreme_move_covered_fraction_override,
         intra_commodity_spread_charge_override=args.intra_commodity_spread_charge_override,
         short_option_minimum_override=args.short_option_minimum_override,
+        call_market_price_override=args.call_market_price_override,
+        put_market_price_override=args.put_market_price_override,
     )
 
     if args.option_type is None:
@@ -903,14 +989,16 @@ def run_streamlit() -> None:
 
     Hisse seçilip veriler çekildikten sonra: vade ve strike, Takasbank'ın
     o günkü PC-SPAN dosyasında gerçekten bulunan değerlerden dropdown ile
-    seçilir (bkz. takasbank_xml.py). T, faiz oranı, PSR, VSR, Extreme Move
+    seçilir (bkz. takasbank_xml.py). Spot fiyat (<phyPf><phy><p>), taban/
+    piyasa fiyatı (<opt><p>, 16 senaryonun "Fark" hesabında Black-Scholes
+    taban yerine kullanılır), T, faiz oranı, PSR, VSR, Extreme Move
     Multiplier/Covered Fraction ve implied volatility (call/put ayrı ayrı)
     bu strike/vade için Takasbank'tan otomatik çekilir; Takasbank verisi
     yoksa (hisse/vade/strike XML'de bulunamazsa) sırasıyla Takasbank PDF'i,
-    yfinance historical volatility ve tarih farkından hesaplanan T'ye
-    nazikçe düşülür. Spot fiyat her zaman yfinance'ten gelir (Takasbank'ın
-    underlying fiyatı kullanılmaz). Otomatik çekilen her bileşen, "Değiştir"
-    işaretlenip manuel bir değer girerek override edilebilir.
+    yfinance (spot/historical volatility için fallback) ve kendi teorik
+    Black-Scholes hesabımıza (taban fiyat için fallback) nazikçe düşülür.
+    Otomatik çekilen her bileşen, "Değiştir" işaretlenip manuel bir değer
+    girerek override edilebilir.
     """
     import streamlit as st
 
@@ -991,6 +1079,39 @@ def run_streamlit() -> None:
     takasbank_series = fetched.get("takasbank_series")
     takasbank_info = takasbank_xml.last_update_info()
 
+    # Spot fiyat ARTIK ANA KAYNAK olarak Takasbank'ın günlük XML'inden
+    # gelir (<phyPf><phy><p>); yfinance sadece Takasbank'ta bu hisse/gün
+    # bulunamazsa fallback/karşılaştırma amaçlı kullanılır.
+    try:
+        takasbank_spot = takasbank_xml.get_spot_price(fetched["ticker"])
+    except Exception:
+        takasbank_spot = None
+    if takasbank_spot is not None:
+        spot_auto, spot_source = takasbank_spot.price, "Takasbank XML"
+    else:
+        spot_auto, spot_source = fetched["spot"], "yfinance (fallback — Takasbank'ta bulunamadı)"
+
+    # Tek, konsolide bilgi bloğu -- spot/taban fiyat/T/faiz/PSR/VSR/Extreme
+    # Move/implied volatility gibi aşağıdaki HER alanın yanına ayrı ayrı
+    # "Takasbank XML" yazmak yerine, kaynağı ve son güncelleme zamanını
+    # burada TEK SEFER açıklıyoruz.
+    if takasbank_info:
+        source_link = takasbank_xml.folder_url(takasbank_info["source_date"])
+        st.caption(
+            f":green[●] Spot, taban/piyasa fiyatı, T, faiz oranı, PSR, VSR, "
+            f"Extreme Move ve implied volatility [Takasbank'ın günlük PC-SPAN "
+            f"dosyasından]({source_link}) otomatik çekiliyor · veri tarihi: "
+            f"{takasbank_info['source_date'].strftime('%d.%m.%Y')} · son güncelleme: "
+            f"{takasbank_info['cached_at'].strftime('%d.%m.%Y %H:%M')}. Aşağıda "
+            "'Değiştir' ile her alanı elle üzerine yazabilirsin."
+        )
+    else:
+        st.caption(
+            "⚠️ Takasbank'ın günlük XML verisi şu an çekilemedi — spot/taban fiyat "
+            "ve risk parametreleri için yedek kaynaklara (PDF / yfinance / teorik "
+            "hesap) düşülüyor."
+        )
+
     st.divider()
     st.subheader("Vade ve Strike")
 
@@ -1002,11 +1123,6 @@ def run_streamlit() -> None:
             format_func=lambda d: d.strftime("%d.%m.%Y"),
             help="Takasbank'ın güncel dosyasında bu hisse için gerçekten mevcut olan vadeler.",
         )
-        if takasbank_info:
-            st.caption(
-                f":green[●] Takasbank verisi {takasbank_info['source_date'].strftime('%d.%m.%Y')} "
-                f"tarihli · son güncelleme: {takasbank_info['cached_at'].strftime('%d.%m.%Y %H:%M')}"
-            )
     else:
         st.warning(
             "Bu hisse için Takasbank XML verisi bulunamadı — vade tarihini elle gir. "
@@ -1021,7 +1137,7 @@ def run_streamlit() -> None:
     if available_strikes:
         closest_idx = min(
             range(len(available_strikes)),
-            key=lambda i: abs(available_strikes[i] - fetched["spot"]),
+            key=lambda i: abs(available_strikes[i] - spot_auto),
         )
         strike = st.selectbox(
             "Kullanım Fiyatı (Strike)",
@@ -1033,7 +1149,7 @@ def run_streamlit() -> None:
         strike = st.number_input(
             "Kullanım Fiyatı",
             min_value=0.0,
-            value=round(fetched["spot"], 4),
+            value=round(spot_auto, 4),
             step=0.0001,
             format="%.4f",
         )
@@ -1103,8 +1219,15 @@ def run_streamlit() -> None:
     st.subheader("Otomatik Çekilen Değerler (istersen değiştir)")
     rp = fetched["risk_params"]
 
+    # Kaynak etiketini SADECE Takasbank XML'in DIŞINDAki bir kaynağa
+    # (yedek/fallback) düşüldüğünde gösteriyoruz -- Takasbank XML zaten
+    # yukarıdaki tek konsolide bilgi bloğunda belirtiliyor, her satırda
+    # tekrar yazmıyoruz.
+    def _src(label: str) -> str | None:
+        return None if label == "Takasbank XML" else label
+
     spot = _streamlit_override_row(
-        st, "Güncel Fiyat (Spot)", fetched["spot"], "spot", source="yfinance", live=True
+        st, "Güncel Fiyat (Spot)", spot_auto, "spot", source=_src(spot_source), live=True
     )
 
     # PSR/VSR/faiz: Takasbank'ın GÜNLÜK XML'i varsa oradan (canlı, bu vadeye
@@ -1131,19 +1254,19 @@ def run_streamlit() -> None:
         rate_auto, rate_source = 0.45, "varsayılan (Takasbank XML bulunamadı)"
 
     risk_free_rate = _streamlit_override_row(
-        st, "Risksiz Faiz Oranı", rate_auto, "rate", source=rate_source
+        st, "Risksiz Faiz Oranı", rate_auto, "rate", source=_src(rate_source)
     )
     psr = _streamlit_override_row(
-        st, "Price Scan Range (PSR)", psr_auto, "psr", source=psr_source, decimals=4
+        st, "Price Scan Range (PSR)", psr_auto, "psr", source=_src(psr_source), decimals=4
     )
     vsr = _streamlit_override_row(
-        st, "Volatility Scan Range (VSR)", vsr_auto, "vsr", source=vsr_source
+        st, "Volatility Scan Range (VSR)", vsr_auto, "vsr", source=_src(vsr_source)
     )
     emm = _streamlit_override_row(
-        st, "Extreme Move Multiplier", emm_auto, "emm", source=emm_source
+        st, "Extreme Move Multiplier", emm_auto, "emm", source=_src(emm_source)
     )
     emcf = _streamlit_override_row(
-        st, "Extreme Move Covered Fraction", emcf_auto, "emcf", source=emcf_source
+        st, "Extreme Move Covered Fraction", emcf_auto, "emcf", source=_src(emcf_source)
     )
     som = _streamlit_override_row(
         st,
@@ -1157,7 +1280,7 @@ def run_streamlit() -> None:
     if takasbank_call:
         call_vol_auto, call_vol_source = (
             takasbank_call.implied_volatility,
-            "Takasbank XML (implied vol)",
+            "Takasbank XML",
         )
     else:
         call_vol_auto, call_vol_source = (
@@ -1167,7 +1290,7 @@ def run_streamlit() -> None:
     if takasbank_put:
         put_vol_auto, put_vol_source = (
             takasbank_put.implied_volatility,
-            "Takasbank XML (implied vol)",
+            "Takasbank XML",
         )
     else:
         put_vol_auto, put_vol_source = (
@@ -1175,10 +1298,51 @@ def run_streamlit() -> None:
             "yfinance historical (IV bulunamadı)",
         )
     call_volatility = _streamlit_override_row(
-        st, "Volatilite — Call", call_vol_auto, "call_vol", source=call_vol_source
+        st, "Volatilite — Call", call_vol_auto, "call_vol", source=_src(call_vol_source)
     )
     put_volatility = _streamlit_override_row(
-        st, "Volatilite — Put", put_vol_auto, "put_vol", source=put_vol_source
+        st, "Volatilite — Put", put_vol_auto, "put_vol", source=_src(put_vol_source)
+    )
+
+    # Taban fiyat: 16 senaryonun "Fark" hesabında Black-Scholes ile
+    # hesaplanan YENİ (şoklu) fiyattan çıkarılan taban. Takasbank XML'de
+    # <opt><p> olarak gelen GERÇEK piyasa fiyatı varsa o kullanılır (PC-SPAN
+    # Risk Array ekranıyla birebir örtüşmesi için); yoksa kendi teorik
+    # Black-Scholes fiyatımıza (aynı spot/vol/T/strike ile) düşülür --
+    # bu durumda "Fark" hesabı eski (BS-tabanlı) davranışla aynı olur.
+    effective_tte = (
+        time_to_expiry_override if time_to_expiry_override is not None else auto_tte
+    )
+    theoretical_call_price = black_scholes_price(
+        spot, strike, effective_tte, risk_free_rate, call_volatility, "call"
+    )
+    theoretical_put_price = black_scholes_price(
+        spot, strike, effective_tte, risk_free_rate, put_volatility, "put"
+    )
+    if takasbank_call:
+        call_base_auto, call_base_source = takasbank_call.market_price, "Takasbank XML"
+    else:
+        call_base_auto, call_base_source = (
+            theoretical_call_price,
+            "teorik Black-Scholes (Takasbank piyasa fiyatı bulunamadı)",
+        )
+    if takasbank_put:
+        put_base_auto, put_base_source = takasbank_put.market_price, "Takasbank XML"
+    else:
+        put_base_auto, put_base_source = (
+            theoretical_put_price,
+            "teorik Black-Scholes (Takasbank piyasa fiyatı bulunamadı)",
+        )
+
+    st.markdown(
+        "**Taban Fiyat** _(16 senaryonun 'Fark' hesabında şoklu Black-Scholes "
+        "fiyatından çıkarılan taban — call ve put için ayrı)_"
+    )
+    call_market_price = _streamlit_override_row(
+        st, "Taban Fiyat — Call", call_base_auto, "call_base", source=_src(call_base_source)
+    )
+    put_market_price = _streamlit_override_row(
+        st, "Taban Fiyat — Put", put_base_auto, "put_base", source=_src(put_base_source)
     )
 
     st.divider()
@@ -1219,6 +1383,8 @@ def run_streamlit() -> None:
             extreme_move_covered_fraction_override=emcf,
             intra_commodity_spread_charge_override=icsc,
             short_option_minimum_override=som,
+            call_market_price_override=call_market_price,
+            put_market_price_override=put_market_price,
         )
         try:
             st.session_state["results"] = compute_call_and_put(inputs)

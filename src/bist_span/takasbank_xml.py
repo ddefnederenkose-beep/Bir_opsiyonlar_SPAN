@@ -18,13 +18,14 @@ ayrı bir tatil takvimi tutmaya gerek yoktur.
 Bu modül şunu yapar: en son mevcut günü bulur, o günün en güncel/nihai
 dosyasını (EOD varsa o, yoksa en yüksek numaralı INT) indirir, tek
 seferlik bir tarama ile TÜM hisse opsiyon ürünlerinin (``valueMeth=EQTY``)
-T/faiz oranı/PSR/VSR/implied volatility değerlerini ve global Extreme
-Move Multiplier/Covered Fraction değerlerini damıtılmış (distilled) küçük
-bir JSON'a çıkarır, diske cache'ler. Aynı gün için tekrar çağrılırsa
+T/faiz oranı/PSR/VSR/implied volatility/piyasa fiyatı değerlerini, TÜM
+hisselerin spot/underlying fiyatlarını ve global Extreme Move
+Multiplier/Covered Fraction değerlerini damıtılmış (distilled) küçük bir
+JSON'a çıkarır, diske cache'ler. Aynı gün için tekrar çağrılırsa
 diskteki JSON'dan okur, yeniden indirip parse etmez.
 
-XML yapısı hakkında keşif notları (gerçek bir Takasbank EOD dosyası
-üzerinde doğrulanmıştır -- bkz. proje sohbet geçmişi):
+XML yapısı hakkında keşif notları (gerçek bir Takasbank dosyası üzerinde
+doğrulanmıştır -- bkz. proje sohbet geçmişi):
 
 - ``spanFile/definitions/pointDef[r]/scanPointDef``: 16 SPAN senaryosunun
   GLOBAL tanımı (ürün bağımsız, sadece scanRate/r'ye göre gruplanır).
@@ -33,6 +34,10 @@ XML yapısı hakkında keşif notları (gerçek bir Takasbank EOD dosyası
   Move Multiplier, weight = Extreme Move Covered Fraction,
   volScanDef.mult = 0.0 (extreme senaryolarda volatilite şoklanmaz --
   bkz. span_engine.generate_risk_scenarios docstring'i).
+- ``spanFile/exchange/.../phyPf``: hisse başına BİR kayıt, dayanak
+  varlığın kendisi için (``pfCode``, ``phy/p``=güncel spot fiyat,
+  örn. AKBNK için 74.3). Bu artık spot fiyatın ANA kaynağıdır
+  (yfinance yalnızca opsiyonel karşılaştırma/fallback amaçlı).
 - ``spanFile/exchange/oofPf/oopPf``: hisse başına bir kayıt
   (``pfCode``, ``valueMeth=EQTY`` hisse opsiyonlarını işaretler).
   - ``series``: vade başına bir kayıt (``pe``=vade tarihi YYYYMMDD,
@@ -42,14 +47,12 @@ XML yapısı hakkında keşif notları (gerçek bir Takasbank EOD dosyası
     isim yanıltıcı, PDF'teki VSR="31" değerinin /100'lenmiş hâliyle
     birebir eşleşir)).
     - ``opt``: strike başına bir kayıt (``k``=strike, ``o``=C/P,
-      ``v``=implied volatility ondalık, ``p``=piyasa/uzlaşma fiyatı --
-      BU PROJEDE KULLANILMIYOR, opsiyon fiyatı hâlâ kendi Black-Scholes
-      hesabımızdan geliyor).
-
-Kesinlikle KULLANILMAYAN alanlar (kasıtlı, kullanıcı talimatıyla):
-- Spot/underlying fiyatı: yfinance'ten gelmeye devam eder.
-- ``opt/p`` (piyasa/uzlaşma fiyatı): Black-Scholes taban fiyatının
-  yerini almaz.
+      ``v``=implied volatility ondalık, ``p``=piyasa/uzlaşma fiyatı,
+      örn. AKBNK K=74 call için 1.72). Bu artık SPAN'in 16 senaryosundaki
+      "Fark" hesabının taban fiyatıdır (bkz. span_engine.
+      calculate_scenario_pnl'in base_price parametresi) -- kendi
+      Black-Scholes'umuzla hesaplanan TEORİK fiyatın yerini alır; teorik
+      fiyat artık sadece referans/karşılaştırma amaçlı ayrıca tutulur.
 
 SOM (Short Option Minimum) ve Intra-Commodity Spread Charge bu
 katmandan GELMEZ -- keşif sırasında bunların ürün başına düz bir
@@ -106,6 +109,10 @@ class TakasbankOptionParams:
         extreme_move_multiplier: Extreme Move Multiplier (global, ör. 3.0).
         extreme_move_covered_fraction: Extreme Move Covered Fraction
             (global, ör. 0.32).
+        market_price: Bu kontratın Takasbank'ın yayınladığı gerçek
+            piyasa/uzlaşma fiyatı (<opt><p>). SPAN'in 16 senaryo
+            hesabında "taban" olarak kullanılır (bkz. span_engine.
+            calculate_scenario_pnl'in base_price parametresi).
         source_date: Bu verinin ait olduğu Takasbank iş günü.
     """
 
@@ -120,10 +127,12 @@ class TakasbankOptionParams:
     volatility_scan_range: float
     extreme_move_multiplier: float
     extreme_move_covered_fraction: float
+    market_price: float
     source_date: date
 
 
-def _folder_url(d: date) -> str:
+def folder_url(d: date) -> str:
+    """Bir günün Takasbank klasör URL'ini döner (UI'da kaynak linki göstermek için de kullanılır)."""
     return f"{BASE_URL}/{d.strftime('%y%m%d')}/"
 
 
@@ -146,7 +155,7 @@ def find_latest_trading_day(
     for offset in range(max_lookback):
         d = today - timedelta(days=offset)
         try:
-            resp = requests.head(_folder_url(d), timeout=_HTTP_TIMEOUT)
+            resp = requests.head(folder_url(d), timeout=_HTTP_TIMEOUT)
         except requests.RequestException:
             continue
         if resp.status_code == 200:
@@ -159,7 +168,7 @@ def find_latest_trading_day(
 
 def _list_directory_files(d: date) -> list[str]:
     """Bir gün klasöründeki .zip dosya adlarını (belgede geçtiği sırayla) döner."""
-    resp = requests.get(_folder_url(d), timeout=_HTTP_TIMEOUT)
+    resp = requests.get(folder_url(d), timeout=_HTTP_TIMEOUT)
     resp.raise_for_status()
     return re.findall(r'HREF="[^"]*/(TAKAS[^"]+\.zip)"', resp.text)
 
@@ -201,7 +210,7 @@ def _download_and_extract_xml(d: date, filename: str) -> Path:
     if xml_path.exists():
         return xml_path
 
-    url = f"{_folder_url(d)}{filename}"
+    url = f"{folder_url(d)}{filename}"
     resp = requests.get(url, timeout=180)
     resp.raise_for_status()
 
@@ -245,16 +254,32 @@ def _parse_global_extreme_move(xml_path: Path) -> tuple[float, float]:
     )
 
 
-def _parse_products(xml_path: Path) -> dict:
-    """Tüm hisse opsiyon ürünlerini (valueMeth=EQTY) tek geçişte damıtır.
+def _parse_products_and_spots(xml_path: Path) -> tuple[dict, dict]:
+    """Tüm hisse opsiyon ürünlerini (oopPf) VE spot fiyatlarını (phyPf)
+    TEK geçişte damıtır (iki ayrı tam-dosya taraması yapmamak için).
 
     Returns:
-        {ticker: {expiry_yyyymmdd: {"t", "intrRate", "psr", "vsr",
-        "options": [{"k", "o", "v"}, ...]}}}
+        (products, spot_prices)
+        products: {ticker: {expiry_yyyymmdd: {"t", "intrRate", "psr",
+            "vsr", "options": [{"k", "o", "v", "p"}, ...]}}}
+        spot_prices: {ticker: spot_fiyatı}
     """
     products: dict[str, dict] = {}
+    spot_prices: dict[str, float] = {}
     context = ET.iterparse(str(xml_path), events=("end",))
     for _event, elem in context:
+        if elem.tag == "phyPf":
+            try:
+                ticker = elem.findtext("pfCode")
+                p_val = elem.findtext("phy/p")
+                if ticker and p_val:
+                    price = float(p_val)
+                    if price > 0:  # bazı pasif/kotasyonsuz enstrümanlarda 0.0 geliyor
+                        spot_prices[ticker] = price
+            finally:
+                elem.clear()
+            continue
+
         if elem.tag != "oopPf":
             continue
         try:
@@ -279,8 +304,11 @@ def _parse_products(xml_path: Path) -> dict:
                     k = opt.findtext("k")
                     o = opt.findtext("o")
                     v = opt.findtext("v")
-                    if k and o and v:
-                        options.append({"k": float(k), "o": o, "v": float(v)})
+                    p = opt.findtext("p")
+                    if k and o and v and p is not None:
+                        options.append(
+                            {"k": float(k), "o": o, "v": float(v), "p": float(p)}
+                        )
 
                 by_expiry[expiry_str] = {
                     "t": float(t_val),
@@ -295,19 +323,20 @@ def _parse_products(xml_path: Path) -> dict:
         finally:
             elem.clear()
 
-    return products
+    return products, spot_prices
 
 
 def build_distilled_cache(xml_path: Path) -> dict:
     """XML'i tarayıp damıtılmış (küçük, hızlı yüklenen) bir sözlük üretir."""
     emm, ecf = _parse_global_extreme_move(xml_path)
-    products = _parse_products(xml_path)
+    products, spot_prices = _parse_products_and_spots(xml_path)
     return {
         "global": {
             "extreme_move_multiplier": emm,
             "extreme_move_covered_fraction": ecf,
         },
         "products": products,
+        "spot_prices": spot_prices,
     }
 
 
@@ -369,8 +398,8 @@ def get_option_params(
     today: date | None = None,
 ) -> TakasbankOptionParams:
     """Verilen hisse/vade/strike/tip için Takasbank'ın günlük PC-SPAN
-    dosyasından T, faiz oranı, implied volatility, PSR, VSR, Extreme Move
-    Multiplier/Covered Fraction değerlerini çeker.
+    dosyasından T, faiz oranı, implied volatility, piyasa fiyatı, PSR,
+    VSR, Extreme Move Multiplier/Covered Fraction değerlerini çeker.
 
     Args:
         ticker: BIST sembolü (".IS" soneki otomatik temizlenir).
@@ -425,6 +454,7 @@ def get_option_params(
                 extreme_move_covered_fraction=distilled["global"][
                     "extreme_move_covered_fraction"
                 ],
+                market_price=opt["p"],
                 source_date=trading_day,
             )
 
@@ -434,4 +464,44 @@ def get_option_params(
     raise ValueError(
         f"{normalized_ticker} {expiry_str} {option_type} için strike={strike} "
         f"bulunamadı. Mevcut strike'lar: {available_strikes}"
+    )
+
+
+@dataclass
+class TakasbankSpotPrice:
+    """Bir hissenin Takasbank'ın günlük PC-SPAN dosyasından çekilen
+    güncel/spot fiyatı (``phyPf/phy/p``)."""
+
+    ticker: str
+    price: float
+    source_date: date
+
+
+def get_spot_price(ticker: str, today: date | None = None) -> TakasbankSpotPrice:
+    """Bir hissenin Takasbank XML'inden spot/underlying fiyatını çeker.
+
+    Args:
+        ticker: BIST sembolü (".IS" soneki otomatik temizlenir).
+        today: Test/override amaçlı "bugün" tarihi (varsayılan: gerçek bugün).
+
+    Returns:
+        TakasbankSpotPrice.
+
+    Raises:
+        KeyError: Hisse dosyada bulunamazsa.
+    """
+    normalized_ticker = ticker.upper().strip().removesuffix(".IS")
+    trading_day, cache_path = ensure_daily_cache(today)
+    distilled = json.loads(cache_path.read_text())
+
+    spot_prices = distilled.get("spot_prices", {})
+    if normalized_ticker not in spot_prices:
+        raise KeyError(
+            f"{normalized_ticker}, {trading_day} tarihli Takasbank dosyasında "
+            f"spot fiyatı bulunamadı"
+        )
+    return TakasbankSpotPrice(
+        ticker=normalized_ticker,
+        price=spot_prices[normalized_ticker],
+        source_date=trading_day,
     )

@@ -34,14 +34,14 @@ def test_parse_global_extreme_move_reads_point_15_from_equity_group():
 
 def test_parse_products_only_includes_equity_products():
     """Sadece valueMeth=EQTY ürünler dahil edilmeli (USDTRY=FX hariç tutulmalı)."""
-    products = tbx._parse_products(FIXTURE_PATH)
+    products, _spots = tbx._parse_products_and_spots(FIXTURE_PATH)
     assert "AKBNK" in products
     assert "USDTRY" not in products
 
 
 def test_parse_products_psr_divided_by_100_but_vsr_not():
     """PSR yüzde olarak gelir (/100 gerekir), VSR zaten ondalıktır (/100 gerekmez)."""
-    products = tbx._parse_products(FIXTURE_PATH)
+    products, _spots = tbx._parse_products_and_spots(FIXTURE_PATH)
     series = products["AKBNK"]["20260831"]
     assert series["psr"] == pytest.approx(0.157)  # 15.7 / 100
     assert series["vsr"] == pytest.approx(0.31)  # zaten ondalık
@@ -51,7 +51,7 @@ def test_parse_products_psr_divided_by_100_but_vsr_not():
 
 def test_parse_products_captures_all_expiries_and_options():
     """Birden fazla vade ve strike doğru şekilde ayrıştırılmalı."""
-    products = tbx._parse_products(FIXTURE_PATH)
+    products, _spots = tbx._parse_products_and_spots(FIXTURE_PATH)
     akbnk = products["AKBNK"]
     assert set(akbnk) == {"20260831", "20260928"}
 
@@ -62,11 +62,33 @@ def test_parse_products_captures_all_expiries_and_options():
     assert far_options == {(65.0, "C")}
 
 
-def test_build_distilled_cache_combines_global_and_products():
+def test_parse_products_captures_market_price():
+    """opt/p (piyasa fiyatı) her opsiyon için doğru okunmalı."""
+    products, _spots = tbx._parse_products_and_spots(FIXTURE_PATH)
+    options = products["AKBNK"]["20260831"]["options"]
+    prices = {(o["k"], o["o"]): o["p"] for o in options}
+    assert prices[(52.0, "P")] == pytest.approx(0.01)
+    assert prices[(56.0, "C")] == pytest.approx(1.20)
+
+
+def test_parse_spots_reads_phypf_price():
+    """phyPf/phy/p'den spot fiyatı doğru okunmalı."""
+    _products, spots = tbx._parse_products_and_spots(FIXTURE_PATH)
+    assert spots["AKBNK"] == pytest.approx(74.3)
+
+
+def test_parse_spots_excludes_zero_price_instruments():
+    """p=0.0 olan (pasif/kotasyonsuz) enstrümanlar spot_prices'a dahil edilmemeli."""
+    _products, spots = tbx._parse_products_and_spots(FIXTURE_PATH)
+    assert "AAPBNP" not in spots
+
+
+def test_build_distilled_cache_combines_global_products_and_spots():
     distilled = tbx.build_distilled_cache(FIXTURE_PATH)
     assert distilled["global"]["extreme_move_multiplier"] == pytest.approx(3.0)
     assert distilled["global"]["extreme_move_covered_fraction"] == pytest.approx(0.32)
     assert "AKBNK" in distilled["products"]
+    assert distilled["spot_prices"]["AKBNK"] == pytest.approx(74.3)
 
 
 def test_get_option_params_end_to_end(tmp_path, monkeypatch):
@@ -95,7 +117,35 @@ def test_get_option_params_end_to_end(tmp_path, monkeypatch):
     assert params.volatility_scan_range == pytest.approx(0.31)
     assert params.extreme_move_multiplier == pytest.approx(3.0)
     assert params.extreme_move_covered_fraction == pytest.approx(0.32)
+    assert params.market_price == pytest.approx(1.20)
     assert params.source_date == trading_day
+
+
+def test_get_spot_price_end_to_end(tmp_path, monkeypatch):
+    """get_spot_price, gerçek ağ/indirme olmadan uçtan uca çalışmalı."""
+    monkeypatch.setattr(tbx, "DISTILLED_DIR", tmp_path)
+    trading_day = date(2026, 8, 25)
+    distilled = tbx.build_distilled_cache(FIXTURE_PATH)
+    (tmp_path / f"{trading_day.strftime('%y%m%d')}.json").write_text(
+        __import__("json").dumps(distilled)
+    )
+
+    spot = tbx.get_spot_price("AKBNK.IS", today=trading_day)
+    assert spot.ticker == "AKBNK"
+    assert spot.price == pytest.approx(74.3)
+    assert spot.source_date == trading_day
+
+
+def test_get_spot_price_unknown_ticker_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(tbx, "DISTILLED_DIR", tmp_path)
+    trading_day = date(2026, 8, 25)
+    distilled = tbx.build_distilled_cache(FIXTURE_PATH)
+    (tmp_path / f"{trading_day.strftime('%y%m%d')}.json").write_text(
+        __import__("json").dumps(distilled)
+    )
+
+    with pytest.raises(KeyError, match="YOKHISSE"):
+        tbx.get_spot_price("YOKHISSE", today=trading_day)
 
 
 def test_get_option_params_unknown_ticker_raises_clear_error(tmp_path, monkeypatch):
@@ -193,4 +243,9 @@ def test_get_option_params_real_akbnk():
     )
     assert params.time_to_expiry > 0
     assert 0 < params.implied_volatility < 5
+    assert params.market_price >= 0
     assert params.source_date == trading_day
+
+    spot = tbx.get_spot_price("AKBNK")
+    assert spot.price > 0
+    assert spot.source_date == trading_day
