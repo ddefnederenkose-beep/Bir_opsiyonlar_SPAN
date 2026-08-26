@@ -1097,13 +1097,18 @@ def run_streamlit() -> None:
     # burada TEK SEFER açıklıyoruz.
     if takasbank_info:
         source_link = takasbank_xml.folder_url(takasbank_info["source_date"])
+        durum = (
+            "gün sonu (EOD, o günün nihai verisi)"
+            if takasbank_info["is_final"]
+            else "gün içi ara güncelleme — daha yeni bir dosya çıktıkça otomatik yenilenir"
+        )
         st.caption(
             f":green[●] Spot, taban/piyasa fiyatı, T, faiz oranı, PSR, VSR, "
             f"Extreme Move ve implied volatility [Takasbank'ın günlük PC-SPAN "
             f"dosyasından]({source_link}) otomatik çekiliyor · veri tarihi: "
             f"{takasbank_info['source_date'].strftime('%d.%m.%Y')} · son güncelleme: "
-            f"{takasbank_info['cached_at'].strftime('%d.%m.%Y %H:%M')}. Aşağıda "
-            "'Değiştir' ile her alanı elle üzerine yazabilirsin."
+            f"{takasbank_info['cached_at'].strftime('%d.%m.%Y %H:%M')} ({durum}). "
+            "Aşağıda 'Değiştir' ile her alanı elle üzerine yazabilirsin."
         )
     else:
         st.caption(

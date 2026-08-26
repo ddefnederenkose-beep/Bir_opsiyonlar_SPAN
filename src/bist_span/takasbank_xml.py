@@ -68,6 +68,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import time
 import zipfile
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -199,15 +200,20 @@ def _pick_best_file(filenames: list[str]) -> str:
     return sorted(filenames)[-1]
 
 
-def _download_and_extract_xml(d: date, filename: str) -> Path:
+def _download_and_extract_xml(d: date, filename: str, force: bool = False) -> Path:
     """ZIP'i indirir (daha önce indirilmediyse), içindeki tek XML'i çıkarır.
+
+    Args:
+        force: True ise, disk'te aynı günün XML'i zaten olsa bile yeniden
+            indirir (ör. gün içinde daha güncel/nihai bir dosya çıktığında
+            -- bkz. ensure_daily_cache).
 
     Returns:
         Çıkarılan XML dosyasının yolu.
     """
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     xml_path = RAW_DIR / f"{d.strftime('%y%m%d')}.xml"
-    if xml_path.exists():
+    if xml_path.exists() and not force:
         return xml_path
 
     url = f"{folder_url(d)}{filename}"
@@ -344,28 +350,86 @@ def _distilled_cache_path(d: date) -> Path:
     return DISTILLED_DIR / f"{d.strftime('%y%m%d')}.json"
 
 
+_RECHECK_AFTER_SECONDS = 15 * 60  # gün içi (INT) cache'ler bu süre sonra tekrar kontrol edilir
+
+
+def _write_distilled_cache(cache_path: Path, distilled: dict, source_file: str) -> None:
+    payload = {
+        **distilled,
+        "source_file": source_file,
+        "is_final": source_file.startswith("TAKASEOD"),
+    }
+    DISTILLED_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(payload, ensure_ascii=False))
+
+
 def ensure_daily_cache(today: date | None = None) -> tuple[date, Path]:
     """En son iş gününün damıtılmış cache'inin var olduğundan emin olur.
 
-    Zaten cache'lenmişse yeniden indirmez/parse etmez. Değilse: en son
-    mevcut Takasbank klasörünü bulur, en güncel dosyasını indirir, parse
+    Cache YOKSA: en son mevcut Takasbank klasörünü bulur, en güncel
+    dosyasını (EOD varsa o, yoksa en yüksek numaralı INT) indirir, parse
     eder ve JSON olarak cache'ler.
+
+    Cache VARSA ve zaten EOD'dan (o günün NİHAİ dosyası) üretildiyse,
+    hiçbir şey değişmeyeceği için doğrudan döner.
+
+    Cache VARSA ama bir INTRADAY dosyadan üretildiyse (henüz EOD
+    yayınlanmamışken çekilmiş): Takasbank INTRADAY dosyaları gün içinde
+    saatlik güncellediği ve günün sonunda (~20:30 civarı) NİHAİ EOD
+    dosyasını yayınladığı için, bu cache süresiz geçerli SAYILMAZ --
+    bayatlamış (aynı gün içinde daha güncel bir dosya çıkmış) olabilir.
+    Bu yüzden cache _RECHECK_AFTER_SECONDS'tan eskiyse, ağır XML'i değil
+    sadece klasör listesini (küçük bir HTML) tekrar çekip daha iyi bir
+    dosya (EOD ya da daha yüksek numaralı INT) çıkmış mı diye bakılır;
+    çıkmışsa cache o dosyadan yeniden kurulur. Bu kontrol her çağrıda
+    DEĞİL, sadece süre dolduğunda yapılır -- aksi halde Streamlit'in her
+    widget etkileşiminde tüm scripti yeniden çalıştırması Takasbank'ın
+    sunucusuna gereksiz istek yağdırırdı.
 
     Returns:
         (o günün tarihi, damıtılmış JSON dosyasının yolu)
     """
     trading_day = find_latest_trading_day(today)
     cache_path = _distilled_cache_path(trading_day)
+
     if cache_path.exists():
+        try:
+            cached = json.loads(cache_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            cached = {}
+        if cached.get("is_final"):
+            return trading_day, cache_path
+
+        age_seconds = time.time() - cache_path.stat().st_mtime
+        if age_seconds < _RECHECK_AFTER_SECONDS:
+            return trading_day, cache_path
+
+        try:
+            files = _list_directory_files(trading_day)
+            best_file = _pick_best_file(files)
+        except Exception:
+            # Klasör listesi şu an çekilemedi (geçici ağ sorunu vb.) --
+            # elimizdeki (bayat olabilecek) cache'i kullanmaya devam et,
+            # bir sonraki çağrıda tekrar denenir.
+            return trading_day, cache_path
+
+        if best_file == cached.get("source_file"):
+            # Daha iyi bir dosya yok -- tekrar tekrar kontrol etmemek için
+            # mtime'ı güncelleyip _RECHECK_AFTER_SECONDS'ı sıfırlıyoruz.
+            cache_path.touch()
+            return trading_day, cache_path
+
+        # Gün içinde daha güncel/nihai bir dosya yayınlanmış -- yeniden kur.
+        xml_path = _download_and_extract_xml(trading_day, best_file, force=True)
+        distilled = build_distilled_cache(xml_path)
+        _write_distilled_cache(cache_path, distilled, best_file)
         return trading_day, cache_path
 
     files = _list_directory_files(trading_day)
     best_file = _pick_best_file(files)
     xml_path = _download_and_extract_xml(trading_day, best_file)
     distilled = build_distilled_cache(xml_path)
-
-    DISTILLED_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps(distilled, ensure_ascii=False))
+    _write_distilled_cache(cache_path, distilled, best_file)
     return trading_day, cache_path
 
 
@@ -373,7 +437,10 @@ def last_update_info() -> dict | None:
     """Diskteki en güncel damıtılmış cache'in tarihini döner (UI'da göstermek için).
 
     Returns:
-        {"source_date": date, "cached_at": datetime} ya da hiç cache yoksa None.
+        {"source_date": date, "cached_at": datetime, "is_final": bool}
+        ya da hiç cache yoksa None. "is_final" False ise, cache bir INTRADAY
+        (gün içi ara) dosyadan üretilmiştir -- Takasbank'ın o günün NİHAİ
+        (EOD) dosyası henüz yayınlanmamış olabilir (bkz. ensure_daily_cache).
     """
     if not DISTILLED_DIR.exists():
         return None
@@ -382,8 +449,13 @@ def last_update_info() -> dict | None:
         return None
     latest = cache_files[-1]
     d = date(2000 + int(latest.stem[:2]), int(latest.stem[2:4]), int(latest.stem[4:6]))
+    try:
+        is_final = json.loads(latest.read_text()).get("is_final", False)
+    except (json.JSONDecodeError, OSError):
+        is_final = False
     return {
         "source_date": d,
+        "is_final": is_final,
         "cached_at": __import__("datetime").datetime.fromtimestamp(
             latest.stat().st_mtime
         ),

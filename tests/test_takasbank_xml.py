@@ -11,6 +11,9 @@ Ağa gerçekten giden testler @pytest.mark.network ile işaretlidir.
 
 from __future__ import annotations
 
+import json
+import os
+import time
 from datetime import date
 from pathlib import Path
 
@@ -207,6 +210,163 @@ def test_pick_best_file_picks_highest_numbered_int_when_no_eod():
 def test_pick_best_file_raises_on_empty_list():
     with pytest.raises(ValueError):
         tbx._pick_best_file([])
+
+
+def _seed_distilled_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    trading_day: date,
+    source_file: str,
+    is_final: bool,
+    age_seconds: float,
+) -> Path:
+    """Testler için diskte hazır bir damıtılmış cache dosyası kurar.
+
+    ensure_daily_cache'in "cache zaten var" dalını, gerçek ağa hiç
+    dokunmadan test edebilmek için kullanılır -- bkz. aşağıdaki
+    test_ensure_daily_cache_* testleri.
+    """
+    monkeypatch.setattr(tbx, "DISTILLED_DIR", tmp_path / "distilled")
+    monkeypatch.setattr(tbx, "RAW_DIR", tmp_path / "raw")
+    tbx.DISTILLED_DIR.mkdir(parents=True)
+    cache_path = tbx._distilled_cache_path(trading_day)
+    cache_path.write_text(
+        json.dumps(
+            {
+                "global": {
+                    "extreme_move_multiplier": 3.0,
+                    "extreme_move_covered_fraction": 0.32,
+                },
+                "products": {},
+                "spot_prices": {},
+                "source_file": source_file,
+                "is_final": is_final,
+            }
+        )
+    )
+    stale_time = time.time() - age_seconds
+    os.utime(cache_path, (stale_time, stale_time))
+    return cache_path
+
+
+def test_ensure_daily_cache_eod_cache_never_rechecked(tmp_path, monkeypatch):
+    """is_final=True (EOD'dan üretilmiş) bir cache, ne kadar eski olursa olsun tekrar ağa sorulmamalı."""
+    trading_day = date(2026, 8, 26)
+    monkeypatch.setattr(tbx, "find_latest_trading_day", lambda today=None: trading_day)
+    cache_path = _seed_distilled_cache(
+        tmp_path, monkeypatch, trading_day, "TAKASEOD_x-001.zip", True, age_seconds=999_999
+    )
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("EOD cache asla yeniden kontrol edilmemeli")
+
+    monkeypatch.setattr(tbx, "_list_directory_files", _boom)
+
+    d, path = tbx.ensure_daily_cache()
+    assert d == trading_day
+    assert path == cache_path
+
+
+def test_ensure_daily_cache_intraday_not_rechecked_within_threshold(tmp_path, monkeypatch):
+    """Eşik dolmadan (taze bir INTRADAY cache), ağa hiç sorulmadan doğrudan dönmeli."""
+    trading_day = date(2026, 8, 26)
+    monkeypatch.setattr(tbx, "find_latest_trading_day", lambda today=None: trading_day)
+    _seed_distilled_cache(
+        tmp_path, monkeypatch, trading_day, "TAKASINT_x-005.zip", False, age_seconds=60
+    )
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("eşik dolmadan tekrar ağa sorulmamalı")
+
+    monkeypatch.setattr(tbx, "_list_directory_files", _boom)
+
+    _, cache_path = tbx.ensure_daily_cache()
+    cached = json.loads(cache_path.read_text())
+    assert cached["source_file"] == "TAKASINT_x-005.zip"
+
+
+def test_ensure_daily_cache_intraday_rechecks_and_keeps_same_file(tmp_path, monkeypatch):
+    """Eşik dolmuş ama daha iyi bir dosya yoksa: XML tekrar indirilmemeli, sadece mtime tazelenmeli."""
+    trading_day = date(2026, 8, 26)
+    monkeypatch.setattr(tbx, "find_latest_trading_day", lambda today=None: trading_day)
+    cache_path = _seed_distilled_cache(
+        tmp_path,
+        monkeypatch,
+        trading_day,
+        "TAKASINT_x-005.zip",
+        False,
+        age_seconds=tbx._RECHECK_AFTER_SECONDS + 10,
+    )
+    before_mtime = cache_path.stat().st_mtime
+
+    monkeypatch.setattr(tbx, "_list_directory_files", lambda d: ["TAKASINT_x-005.zip"])
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("aynı dosya varken XML tekrar indirilmemeli")
+
+    monkeypatch.setattr(tbx, "_download_and_extract_xml", _boom)
+
+    _, path = tbx.ensure_daily_cache()
+    assert path.stat().st_mtime > before_mtime
+    cached = json.loads(path.read_text())
+    assert cached["source_file"] == "TAKASINT_x-005.zip"
+
+
+def test_ensure_daily_cache_intraday_rebuilds_when_newer_file_appears(tmp_path, monkeypatch):
+    """Eşik dolmuş VE daha güncel/nihai bir dosya çıkmışsa: cache o dosyadan yeniden kurulmalı."""
+    trading_day = date(2026, 8, 26)
+    monkeypatch.setattr(tbx, "find_latest_trading_day", lambda today=None: trading_day)
+    _seed_distilled_cache(
+        tmp_path,
+        monkeypatch,
+        trading_day,
+        "TAKASINT_x-005.zip",
+        False,
+        age_seconds=tbx._RECHECK_AFTER_SECONDS + 10,
+    )
+
+    monkeypatch.setattr(
+        tbx,
+        "_list_directory_files",
+        lambda d: ["TAKASINT_x-005.zip", "TAKASEOD_x-001.zip"],
+    )
+    fake_xml_path = tmp_path / "fake.xml"
+    fake_xml_path.write_text("<spanFile/>")
+
+    def _fake_download(d, filename, force=False):
+        assert filename == "TAKASEOD_x-001.zip"
+        assert force is True
+        return fake_xml_path
+
+    monkeypatch.setattr(tbx, "_download_and_extract_xml", _fake_download)
+    monkeypatch.setattr(
+        tbx,
+        "build_distilled_cache",
+        lambda xml_path: {
+            "global": {
+                "extreme_move_multiplier": 3.0,
+                "extreme_move_covered_fraction": 0.32,
+            },
+            "products": {},
+            "spot_prices": {"AKBNK": 74.3},
+        },
+    )
+
+    _, path = tbx.ensure_daily_cache()
+    cached = json.loads(path.read_text())
+    assert cached["source_file"] == "TAKASEOD_x-001.zip"
+    assert cached["is_final"] is True
+    assert cached["spot_prices"]["AKBNK"] == pytest.approx(74.3)
+
+
+def test_last_update_info_reports_is_final(tmp_path, monkeypatch):
+    trading_day = date(2026, 8, 26)
+    _seed_distilled_cache(
+        tmp_path, monkeypatch, trading_day, "TAKASINT_x-005.zip", False, age_seconds=5
+    )
+    info = tbx.last_update_info()
+    assert info["source_date"] == trading_day
+    assert info["is_final"] is False
 
 
 @pytest.mark.network
