@@ -116,12 +116,18 @@ class SpanCalculationInput:
             (ör. Takasbank XML'in opt/p'si -- gerçek piyasa/uzlaşma fiyatı),
             teorik hesap yerine doğrudan o kullanılır. call/put versiyonları
             volatility_override'daki gibi tarafa özel önceliklidir.
-        time_to_expiry_override: Verilirse (expiry - bugün).gün/365'ten
-            hesaplanan T yerine bu değer (yıl cinsinden) doğrudan kullanılır.
-            Takvim tarihi her zaman TAM gün sayısı verir (ör. 37/365 =
-            0.10136986...); bir referans hesaplayıcı (Excel vb.) T'yi
-            doğrudan ondalık olarak giriyorsa (ör. 0.1014), birebir
-            karşılaştırma için bu alanı kullan.
+        time_to_expiry_override: Verilirse, T için hem Takasbank XML'in
+            kendi <t> alanı HEM DE takvim hesabı yerine doğrudan bu değer
+            (yıl cinsinden) kullanılır. Verilmezse (None) T ARTIK ANA
+            KAYNAK olarak Takasbank XML'den gelir (spot/taban fiyat gibi);
+            Takasbank'ta bu strike/vade/tip bulunamazsa (expiry - bugün)
+            .gün/365'e (takvim günü) düşülür. Bu ikisi GENELDE FARKLIDIR
+            -- Takasbank'ın T'si takvim günü/365 değildir (ör. 33.54/365,
+            35 takvim günü değil) -- ve PC-SPAN'ın Risk Array'iyle birebir
+            karşılaştırıldığında (bkz. proje sohbet geçmişi) bu farkın
+            Scanning Risk'i belirgin ölçüde kaydırdığı doğrulandı. Bir
+            referans hesaplayıcı (Excel vb.) T'yi kendi ondalık değeriyle
+            giriyorsa, birebir karşılaştırma için bu alanı kullan.
         price_scan_range_override, volatility_scan_range_override,
         extreme_move_multiplier_override, extreme_move_covered_fraction_override,
         short_option_minimum_override:
@@ -442,11 +448,20 @@ def compute_span_result(inputs: SpanCalculationInput) -> dict:
         if time_to_expiry <= 0:
             raise ValueError("time_to_expiry_override sıfırdan büyük olmalı")
     else:
-        # Takvim tarihinden hesaplanan T her zaman TAM gün sayısıdır (ör.
-        # 37/365); bir referans hesaplayıcının ondalık T'siyle (ör. 0.1014)
-        # birebir eşleşmesi beklenmemeli -- gerekiyorsa time_to_expiry_override
-        # kullan.
-        time_to_expiry = (inputs.expiry - date.today()).days / 365
+        # T ARTIK ANA KAYNAK olarak Takasbank XML'in kendi <t> alanından
+        # gelir (spot ile aynı öncelik mantığı -- bkz. yukarısı). Bu ÖNEMLİ:
+        # Takasbank'ın T'si takvim günü/365 DEĞİLDİR (ör. 33.54/365, 35
+        # takvim günü değil) -- PC-SPAN'ın kendi Risk Array'iyle gerçek
+        # veride birebir karşılaştırıldığında (bkz. proje sohbet geçmişi)
+        # takvim-günü yaklaşıklığının Fark/Scanning Risk'i belirgin ölçüde
+        # kaydırdığı doğrulandı. Takasbank'ta bu strike/vade/tip yoksa
+        # (ör. hisse/opsiyon XML'de bulunamıyorsa) takvim gününe düşülür.
+        try:
+            time_to_expiry = takasbank_xml.get_option_params(
+                ticker, inputs.expiry, inputs.strike, inputs.option_type
+            ).time_to_expiry
+        except Exception:
+            time_to_expiry = (inputs.expiry - date.today()).days / 365
         if time_to_expiry <= 0:
             raise ValueError(f"Vade tarihi ({inputs.expiry}) bugünden ileride olmalı")
 
@@ -1251,8 +1266,13 @@ def run_streamlit() -> None:
     # Değiştir işaretli ama alan hâlâ otomatik değerin yuvarlanmış
     # görüntüsündeyse (kullanıcı gerçekten dokunmadıysa), formüle giden T
     # yine tam hassasiyetli auto_tte olsun -- yuvarlanmış görüntü değil.
+    # ÖNEMLİ: Değiştir kapalıyken de None DEĞİL, doğrudan auto_tte
+    # (Takasbank XML'in tam hassasiyetli T'si) geçiyoruz -- None geçmek,
+    # compute_span_result'ın kendi (daha kaba) takvim-günü fallback'ine
+    # sessizce düşmesine yol açardı (bkz. proje sohbet geçmişi: bu tam
+    # olarak PC-SPAN'ın Risk Array'inden sapmanın kök nedeniydi).
     if not override_tte:
-        time_to_expiry_override = None
+        time_to_expiry_override = auto_tte
     elif manual_tte == auto_tte_display:
         time_to_expiry_override = auto_tte
     else:

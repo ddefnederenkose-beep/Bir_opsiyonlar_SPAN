@@ -28,14 +28,17 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "takasbank_span_sample.pdf"
 def fake_price_data(monkeypatch):
     """data_fetch.get_price_data'yı ağa gitmeden sahte bir PriceData ile değiştirir.
 
-    Ayrıca takasbank_xml.get_spot_price'ı da (bulunamadı hatası fırlatacak
-    şekilde) sahteler -- spot artık ÖNCELİKLE Takasbank'tan geldiği için,
-    bu olmadan testler gerçek ağa gidip günden güne değişen gerçek
-    fiyatlarla deterministik olmaktan çıkardı. Bu fixture'ı kullanan
-    testler böylece bilinçli olarak "Takasbank'ta bulunamadı, yfinance'e
-    düşüldü" senaryosunu test eder; Takasbank-öncelikli senaryo ayrı
-    testlerde (bkz. test_compute_span_result_prefers_takasbank_spot)
-    açıkça mock'lanır.
+    Ayrıca takasbank_xml.get_spot_price VE get_option_params'ı da
+    (bulunamadı hatası fırlatacak şekilde) sahteler -- spot ve T artık
+    ÖNCELİKLE Takasbank'tan geldiği için, bu olmadan testler gerçek ağa
+    gidip (ya da diskteki güncel cache'e bağımlı kalıp) günden güne
+    değişen gerçek fiyat/T'lerle deterministik olmaktan çıkardı. Bu
+    fixture'ı kullanan testler böylece bilinçli olarak "Takasbank'ta
+    bulunamadı, yfinance/takvim gününe düşüldü" senaryosunu test eder;
+    Takasbank-öncelikli senaryolar ayrı testlerde (bkz.
+    test_compute_span_result_prefers_takasbank_spot,
+    test_compute_span_result_prefers_takasbank_time_to_expiry) açıkça
+    mock'lanır.
     """
 
     def _fake_get_price_data(ticker: str, period: str = "1y"):
@@ -50,11 +53,20 @@ def fake_price_data(monkeypatch):
     def _fake_get_spot_price_missing(ticker: str, today=None):
         raise KeyError(f"{ticker} test ortamında Takasbank'ta yok")
 
+    def _fake_get_option_params_missing(ticker, expiry, strike, option_type):
+        raise KeyError(f"{ticker} test ortamında Takasbank'ta yok")
+
     monkeypatch.setattr(data_fetch, "get_price_data", _fake_get_price_data)
     monkeypatch.setattr(main.data_fetch, "get_price_data", _fake_get_price_data)
     monkeypatch.setattr(takasbank_xml, "get_spot_price", _fake_get_spot_price_missing)
     monkeypatch.setattr(
         main.takasbank_xml, "get_spot_price", _fake_get_spot_price_missing
+    )
+    monkeypatch.setattr(
+        takasbank_xml, "get_option_params", _fake_get_option_params_missing
+    )
+    monkeypatch.setattr(
+        main.takasbank_xml, "get_option_params", _fake_get_option_params_missing
     )
 
 
@@ -452,3 +464,109 @@ def test_compute_call_and_put_routes_market_price_per_side(fake_price_data):
     results = main.compute_call_and_put(inputs)
     assert results["call"]["market_price"] == 1.72
     assert results["put"]["market_price"] == 1.03
+
+
+def test_compute_span_result_prefers_takasbank_time_to_expiry(
+    fake_price_data, monkeypatch
+):
+    """T artık ÖNCELİKLE Takasbank XML'in kendi <t> alanından gelmeli.
+
+    Takasbank'ın T'si takvim günü/365 İLE AYNI OLMAK ZORUNDA DEĞİLDİR --
+    gerçek PC-SPAN Risk Array'iyle karşılaştırıldığında (bkz. proje sohbet
+    geçmişi) bu ikisinin karıştırılması Scanning Risk'i belirgin ölçüde
+    kaydırıyordu. fake_price_data fixture'ı get_option_params'ı "bulunamadı"
+    yapıyor; burada açıkça Takasbank'ın GERÇEK bir T döndürdüğü senaryoyu
+    mock'layıp, takvim hesabının (30/365) DEĞİL, Takasbank'ın (0.09189)
+    kullanıldığını doğruluyoruz.
+    """
+    expiry = date.today() + timedelta(days=30)
+
+    def _fake_takasbank_option_params(ticker, exp, strike, option_type):
+        return takasbank_xml.TakasbankOptionParams(
+            ticker=ticker,
+            expiry=exp,
+            strike=strike,
+            option_type=option_type,
+            time_to_expiry=0.09189,  # takvimden hesaplanan 30/365 = 0.08219'dan FARKLI
+            risk_free_rate=0.38,
+            implied_volatility=0.39,
+            price_scan_range=0.157,
+            volatility_scan_range=0.31,
+            extreme_move_multiplier=3.0,
+            extreme_move_covered_fraction=0.32,
+            market_price=4.85,
+            source_date=date.today(),
+        )
+
+    monkeypatch.setattr(
+        main.takasbank_xml, "get_option_params", _fake_takasbank_option_params
+    )
+
+    inputs = SpanCalculationInput(
+        ticker="AKBNK",
+        strike=65,
+        option_type="call",
+        contracts=-1,
+        expiry=expiry,
+        risk_params_file=FIXTURE_PATH,
+    )
+    result = compute_span_result(inputs)
+    assert result["time_to_expiry"] == pytest.approx(0.09189)
+    assert result["time_to_expiry"] != pytest.approx(30 / 365)
+
+
+def test_compute_span_result_falls_back_to_calendar_time_to_expiry_when_takasbank_missing(
+    fake_price_data,
+):
+    """Takasbank'ta bu strike/vade/tip bulunamazsa T takvim hesabına (fallback) düşmeli."""
+    expiry = date.today() + timedelta(days=30)
+    inputs = SpanCalculationInput(
+        ticker="AKBNK",
+        strike=65,
+        option_type="call",
+        contracts=-1,
+        expiry=expiry,
+        risk_params_file=FIXTURE_PATH,
+    )
+    result = compute_span_result(inputs)
+    # fake_price_data fixture'ı Takasbank'ı bulunamadı yapıyor
+    assert result["time_to_expiry"] == pytest.approx(30 / 365)
+
+
+def test_compute_span_result_time_to_expiry_override_beats_takasbank(
+    fake_price_data, monkeypatch
+):
+    """time_to_expiry_override verilmişse, Takasbank'ın T'si de takvim de değil, o kullanılmalı."""
+
+    def _fake_takasbank_option_params(ticker, exp, strike, option_type):
+        return takasbank_xml.TakasbankOptionParams(
+            ticker=ticker,
+            expiry=exp,
+            strike=strike,
+            option_type=option_type,
+            time_to_expiry=0.09189,
+            risk_free_rate=0.38,
+            implied_volatility=0.39,
+            price_scan_range=0.157,
+            volatility_scan_range=0.31,
+            extreme_move_multiplier=3.0,
+            extreme_move_covered_fraction=0.32,
+            market_price=4.85,
+            source_date=date.today(),
+        )
+
+    monkeypatch.setattr(
+        main.takasbank_xml, "get_option_params", _fake_takasbank_option_params
+    )
+
+    inputs = SpanCalculationInput(
+        ticker="AKBNK",
+        strike=65,
+        option_type="call",
+        contracts=-1,
+        expiry=date.today() + timedelta(days=30),
+        risk_params_file=FIXTURE_PATH,
+        time_to_expiry_override=0.1234,
+    )
+    result = compute_span_result(inputs)
+    assert result["time_to_expiry"] == pytest.approx(0.1234)
