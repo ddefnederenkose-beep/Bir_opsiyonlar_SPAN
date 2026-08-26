@@ -63,10 +63,11 @@ from bist_span.span_engine import (
 # Takasbank'ın per-ticker PSR/VSR listesinde geçen ama HENÜZ desteklenmeyen
 # (opsiyon serisi bu uygulamada işlenmeyen) döviz/endeks vadeli işlem
 # sembolleri -- hisse seçim listesinden ve senaryo tablosu başlıklarından
-# hariç tutulur. XU030 (BIST30 endeksi) ve USDTRY (USD/TRY), PDF'teki bu
-# TEMEL isimleriyle burada; günlük XML'deki GERÇEK opsiyon pfCode'ları
-# farklıdır (XU030D, USDTRYKP) -- bkz. takasbank_xml._XML_PFCODE_ALIASES.
-_NON_EQUITY_TICKERS = {"EURTRY", "X10XB", "XLBNK", "XSD25"}
+# hariç tutulur. "USDTRY" de burada -- PDF'teki bu KISALTILMIŞ isim,
+# günlük XML'de kendi opsiyon serisine sahip DEĞİL (sadece referans
+# fiyatı var); gerçek ürünler kendi GERÇEK adlarıyla (USDTRYK, USDTRYKP)
+# _EXTRA_TAKASBANK_TICKERS ile ayrıca eklenir -- bkz. aşağısı.
+_NON_EQUITY_TICKERS = {"USDTRY", "EURTRY", "X10XB", "XLBNK", "XSD25"}
 
 # Projedeki en güncel Takasbank risk parametre dosyası. Takasbank yeni bir
 # "Risk Parametrelerinin Güncellenmesi" mektubu yayınladığında bu dosyayı
@@ -212,14 +213,16 @@ def _load_risk_params_store(risk_params_file: Path) -> RiskParamsStore:
     return store
 
 
-# USDTRYKP (fiziki teslimatlı USD/TRY opsiyonu, bkz. takasbank_xml.py
-# modül dokümantasyonu), Takasbank'ın PDF risk parametre dosyasında KENDİ
-# satırına sahip DEĞİL -- sadece "USDTRY" (asıl/USDTRYK ürünü) satırı var.
-# Gerçek XML'de PSR/VSR'ları BİREBİR AYNI (11.0%/0.32) olduğu doğrulanmıştır;
-# SOM/Intra-Commodity Spread Charge için ayrı bir kaynak olmadığından
-# USDTRY'ninkini ödünç alıyoruz -- bu YAKLAŞIKTIR, Takasbank ileride bu
-# ürün için ayrı bir satır yayınlarsa burası güncellenmeli.
-_RISK_PARAMS_FALLBACK_TICKER = {"USDTRYKP": "USDTRY"}
+# USDTRYK (asıl/birincil) ve USDTRYKP (fiziki teslimatlı varyant) --
+# ikisi de gerçek USD/TRY opsiyon ürünleri (bkz. takasbank_xml.py modül
+# dokümantasyonu) ama Takasbank'ın PDF risk parametre dosyasında KENDİ
+# satırlarına sahip DEĞİLLER -- PDF'te sadece kısaltılmış "USDTRY" satırı
+# var. Gerçek XML'de PSR/VSR'ları BİREBİR AYNI (11.0%/0.32) olduğu
+# doğrulanmıştır; SOM/Intra-Commodity Spread Charge için ayrı bir kaynak
+# olmadığından ikisi de "USDTRY" satırınınkini ödünç alıyor -- bu
+# YAKLAŞIKTIR, Takasbank ileride bu ürünler için ayrı satır yayınlarsa
+# burası güncellenmeli.
+_RISK_PARAMS_FALLBACK_TICKER = {"USDTRYK": "USDTRY", "USDTRYKP": "USDTRY"}
 
 # PDF'te kendi satırı olmayan ama (yukarıdaki fallback ile) risk
 # parametresi türetilebilen, günlük XML'de gerçek opsiyon serisi
@@ -1320,19 +1323,20 @@ def run_streamlit() -> None:
     # ve kullanıcıya "bu tarihte işlem görmemektedir" uyarısı gösterilir.
     call_missing = bool(takasbank_series) and takasbank_call is None
     put_missing = bool(takasbank_series) and takasbank_put is None
-    if call_missing:
-        st.warning(
-            f"⚠️ CALL {strike:g} — bu strike/vade Takasbank'ın günlük "
-            "verisinde bulunamadı, yani bu pozisyon bu tarihte işlem "
-            "görmemektedir. Teorik/uydurulmuş bir değer uygulanmayacak — "
-            "CALL için hesaplama yapılmayacak."
+    if call_missing and put_missing:
+        st.caption(
+            f"CALL {strike:g} ve PUT {strike:g}, bu pozisyonlar bu tarihte "
+            "işlem görmemektedir."
         )
-    if put_missing:
-        st.warning(
-            f"⚠️ PUT {strike:g} — bu strike/vade Takasbank'ın günlük "
-            "verisinde bulunamadı, yani bu pozisyon bu tarihte işlem "
-            "görmemektedir. Teorik/uydurulmuş bir değer uygulanmayacak — "
-            "PUT için hesaplama yapılmayacak."
+    elif call_missing:
+        st.caption(
+            f"CALL {strike:g}, bu pozisyon bu tarihte işlem görmemektedir, "
+            f"sadece PUT {strike:g} pozisyonu bulunmaktadır."
+        )
+    elif put_missing:
+        st.caption(
+            f"PUT {strike:g}, bu pozisyon bu tarihte işlem görmemektedir, "
+            f"sadece CALL {strike:g} pozisyonu bulunmaktadır."
         )
 
     auto_tte = (

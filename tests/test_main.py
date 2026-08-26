@@ -333,33 +333,34 @@ def test_compute_span_result_includes_scenario_table(fake_price_data):
 
 
 def test_available_tickers_includes_supported_index_and_fx_symbols():
-    """USDTRY (USDTRYK opsiyonu) ve XU030 (XU030D opsiyonu) artık DESTEKLENİYOR.
-
-    PDF'te bu TEMEL isimleriyle geçerler; günlük XML'deki gerçek pfCode'ları
-    farklıdır (bkz. takasbank_xml._XML_PFCODE_ALIASES) ama kullanıcıya/PDF'e
-    hep temel isim gösterilir. USDTRYKP (fiziki teslimatlı varyant) PDF'te
-    kendi satırı olmasa da _EXTRA_TAKASBANK_TICKERS ile ayrıca listelenir.
+    """XU030 (XU030D opsiyonu) PDF'teki TEMEL ismiyle; USD/TRY ürünleri
+    (USDTRYK, USDTRYKP) ise KENDİ GERÇEK adlarıyla listelenmeli --
+    PDF'teki kısaltılmış "USDTRY" ismi artık DOĞRUDAN gösterilmiyor
+    (XML'de USDTRY için iki ayrı ürün olduğundan tek bir isim yanıltıcı
+    olurdu, bkz. takasbank_xml._XML_PFCODE_ALIASES).
     """
     tickers = available_tickers(FIXTURE_PATH)
 
     assert "AKBNK" in tickers
     assert "GARAN" in tickers
-    assert "USDTRY" in tickers
     assert "XU030" in tickers
+    assert "USDTRYK" in tickers
     assert "USDTRYKP" in tickers
+    assert "USDTRY" not in tickers
     assert tickers == sorted(tickers)
 
 
 def test_get_risk_params_borrows_som_for_ticker_without_own_pdf_row():
-    """USDTRYKP'nin PDF'te kendi satırı yok -- USDTRY'nin SOM/ICS'ini ödünç almalı."""
+    """USDTRYK/USDTRYKP'nin PDF'te kendi satırı yok -- USDTRY'nin SOM/ICS'ini ödünç almalı."""
     store = main._load_risk_params_store(FIXTURE_PATH)
     usdtry = store.get("USDTRY")
-    borrowed = main._get_risk_params(store, "USDTRYKP")
 
-    assert borrowed.ticker == "USDTRYKP"  # ticker alanı isteneni yansıtmalı
-    assert borrowed.short_option_minimum == usdtry.short_option_minimum
-    assert borrowed.intra_commodity_spread_charge == usdtry.intra_commodity_spread_charge
-    assert borrowed.price_scan_range == usdtry.price_scan_range
+    for ticker in ("USDTRYK", "USDTRYKP"):
+        borrowed = main._get_risk_params(store, ticker)
+        assert borrowed.ticker == ticker  # ticker alanı isteneni yansıtmalı
+        assert borrowed.short_option_minimum == usdtry.short_option_minimum
+        assert borrowed.intra_commodity_spread_charge == usdtry.intra_commodity_spread_charge
+        assert borrowed.price_scan_range == usdtry.price_scan_range
 
     # ".IS" sonekiyle çağrılsa da (compute_span_result'ın normalize ettiği gibi) çalışmalı
     borrowed_is = main._get_risk_params(store, "USDTRYKP.IS")
@@ -369,7 +370,9 @@ def test_get_risk_params_borrows_som_for_ticker_without_own_pdf_row():
 def test_non_equity_tickers_still_excludes_remaining_unsupported_symbols():
     """Henüz opsiyon serisi desteklenmeyen döviz/endeks sembolleri hâlâ hariç."""
     assert "EURTRY" in main._NON_EQUITY_TICKERS
-    assert "USDTRY" not in main._NON_EQUITY_TICKERS  # artık destekleniyor
+    # "USDTRY" PDF'in KISALTILMIŞ ismi -- kendi opsiyon serisi yok, artık
+    # doğrudan seçilebilir DEĞİL (gerçek ürünler USDTRYK/USDTRYKP).
+    assert "USDTRY" in main._NON_EQUITY_TICKERS
     assert "XU030" not in main._NON_EQUITY_TICKERS  # artık destekleniyor
 
 

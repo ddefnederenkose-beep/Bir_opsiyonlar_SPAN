@@ -91,31 +91,36 @@ _EXTREME_MOVE_POINT = "15"
 
 _HTTP_TIMEOUT = 30
 
-# Bazı endeks/döviz ürünlerinde, Takasbank'ın PDF risk parametre
-# dosyasındaki (SOM/Intra-Commodity Spread Charge kaynağı) TEMEL sembol
-# (ör. "XU030", "USDTRY") ile günlük XML'deki GERÇEK opsiyon ürün kodu
-# (pfCode, ör. "XU030D", "USDTRYK") FARKLIDIR -- ikisi aynı dayanak
-# varlığın opsiyonlarını temsil eder, sadece iki farklı Takasbank
-# yayınında iki farklı isimle geçer (gerçek XML'de doğrulanmıştır: PSR/
-# VSR değerleri PDF'teki "temel" isimle birebir eşleşiyor). Kullanıcıya
-# ve PDF'e (risk_params) HER ZAMAN temel ismi gösteriyoruz/kullanıyoruz;
-# günlük XML'e sorarken sessizce gerçek pfCode'a çeviriyoruz. Düz
-# "USDTRY" ve "XU030" pfCode'ları günlük XML'de SADECE dayanak varlık
-# (phyPf, referans fiyat) olarak var -- kendi opsiyon serileri yok.
+# Bazı endeks ürünlerinde, Takasbank'ın PDF risk parametre dosyasındaki
+# (SOM/Intra-Commodity Spread Charge kaynağı) TEMEL sembol (ör. "XU030")
+# ile günlük XML'deki GERÇEK opsiyon ürün kodu (pfCode, ör. "XU030D")
+# FARKLIDIR -- ikisi aynı dayanak varlığın opsiyonlarını temsil eder,
+# sadece iki farklı Takasbank yayınında iki farklı isimle geçer (gerçek
+# XML'de doğrulanmıştır: PSR/VSR değerleri PDF'teki "temel" isimle
+# birebir eşleşiyor). Kullanıcıya ve PDF'e HER ZAMAN temel ismi
+# gösteriyoruz/kullanıyoruz; günlük XML'e sorarken sessizce gerçek
+# pfCode'a çeviriyoruz. Düz "XU030" pfCode'u günlük XML'de SADECE
+# dayanak varlık (phyPf, referans fiyat) olarak var -- kendi opsiyon
+# serisi yok.
 #
-# USD/TRY için XML'de GERÇEKTEN İKİ AYRI opsiyon ürünü var:
+# USD/TRY FARKLI: burada kullanıcıya PDF'in kısaltılmış "USDTRY" ismi
+# DEĞİL, gerçek XML pfCode'ları doğrudan gösteriliyor -- çünkü XML'de
+# GERÇEKTEN İKİ AYRI opsiyon ürünü var (tek bir "USDTRY" alias'ıyla
+# ikisi birden temsil edilemez):
 # - USDTRYK ("1000 USDTRY LEVEL 0"): asıl/birincil ürün -- çok daha
 #   fazla vade (10) ve strike, PDF'teki "USDTRY" satırı BUNA karşılık
 #   gelir (en likit, en kapsamlı olan).
 # - USDTRYKP ("PHY DEL 1000 USDTRY LEVEL 0"): fiziki teslimatlı
 #   (<setlMeth>DELIV</setlMeth>) bir varyant -- sadece 2 vade, az
-#   strike. PDF'te KENDİ satırı yok; main.py'de USDTRY'nin SOM/
-#   Intra-Commodity Spread Charge'ını ödünç alır (bkz.
-#   main._RISK_PARAMS_FALLBACK_TICKER) -- PSR/VSR ikisinde de aynı
-#   (11.0/0.32), sadece SOM/ICS için ayrı bir PDF satırı yok.
+#   strike.
+# İkisi de kendi GERÇEK pfCode'uyla (alias'sız) doğrudan seçilebilir;
+# PDF'te ikisinin de KENDİ satırı yok -- main.py'de PDF'in "USDTRY"
+# satırının SOM/Intra-Commodity Spread Charge'ını ödünç alırlar (bkz.
+# main._RISK_PARAMS_FALLBACK_TICKER) -- PSR/VSR gerçek XML'de PDF'teki
+# "USDTRY" değeriyle birebir aynı (11.0/0.32), sadece SOM/ICS için ayrı
+# bir PDF satırı yok.
 _XML_PFCODE_ALIASES = {
     "XU030": "XU030D",
-    "USDTRY": "USDTRYK",
 }
 
 
