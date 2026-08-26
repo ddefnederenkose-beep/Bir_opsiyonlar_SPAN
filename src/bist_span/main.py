@@ -212,11 +212,48 @@ def _load_risk_params_store(risk_params_file: Path) -> RiskParamsStore:
     return store
 
 
+# USDTRYKP (fiziki teslimatlı USD/TRY opsiyonu, bkz. takasbank_xml.py
+# modül dokümantasyonu), Takasbank'ın PDF risk parametre dosyasında KENDİ
+# satırına sahip DEĞİL -- sadece "USDTRY" (asıl/USDTRYK ürünü) satırı var.
+# Gerçek XML'de PSR/VSR'ları BİREBİR AYNI (11.0%/0.32) olduğu doğrulanmıştır;
+# SOM/Intra-Commodity Spread Charge için ayrı bir kaynak olmadığından
+# USDTRY'ninkini ödünç alıyoruz -- bu YAKLAŞIKTIR, Takasbank ileride bu
+# ürün için ayrı bir satır yayınlarsa burası güncellenmeli.
+_RISK_PARAMS_FALLBACK_TICKER = {"USDTRYKP": "USDTRY"}
+
+# PDF'te kendi satırı olmayan ama (yukarıdaki fallback ile) risk
+# parametresi türetilebilen, günlük XML'de gerçek opsiyon serisi
+# doğrulanmış ek Takasbank ürünleri -- available_tickers()'a PDF listesine
+# ek olarak eklenir.
+_EXTRA_TAKASBANK_TICKERS = tuple(_RISK_PARAMS_FALLBACK_TICKER)
+
+
+def _get_risk_params(store: RiskParamsStore, ticker: str) -> RiskParams:
+    """store.get(ticker) dener; PDF'te kendi satırı yoksa (bkz.
+    _RISK_PARAMS_FALLBACK_TICKER) başka bir ticker'ın parametrelerini
+    ÖDÜNÇ ALIP ticker alanını isteneni yansıtacak şekilde döner."""
+    try:
+        return store.get(ticker)
+    except KeyError:
+        # store.get() ".IS" sonekini kendi içinde temizler (ör.
+        # "AKBNK.IS" -> "AKBNK") -- fallback eşlemesi de aynı normalize
+        # edilmiş isimle çalışmalı, yoksa ".IS" soneki taşıyan bir
+        # çağrıda (compute_span_result'ın normalize ettiği ticker gibi)
+        # eşleşme hiç bulunamaz.
+        normalized = ticker.removesuffix(".IS")
+        fallback = _RISK_PARAMS_FALLBACK_TICKER.get(normalized)
+        if fallback is None:
+            raise
+        return replace(store.get(fallback), ticker=normalized)
+
+
 def available_tickers(risk_params_file: Path = DEFAULT_RISK_PARAMS_FILE) -> list[str]:
     """Verilen risk parametre dosyasında tam opsiyon verisi olan hisseleri döner.
 
     Yani: bu listedeki her ticker için call/put SPAN hesabı yapılabilir.
-    Döviz/endeks vadeli işlemleri (_NON_EQUITY_TICKERS) hariç tutulur.
+    Döviz/endeks vadeli işlemleri (_NON_EQUITY_TICKERS) hariç tutulur;
+    PDF'te kendi satırı olmayan ama risk parametresi türetilebilen ek
+    ürünler (_EXTRA_TAKASBANK_TICKERS, ör. USDTRYKP) dahil edilir.
 
     Not: Bu, "resmi BIST30 endeks listesi" DEĞİL -- Takasbank'ın bu
     belgede opsiyon risk parametresi yayınladığı hisselerin listesidir
@@ -224,7 +261,8 @@ def available_tickers(risk_params_file: Path = DEFAULT_RISK_PARAMS_FILE) -> list
     değişebileceği için garantili bire bir eşleşme değildir).
     """
     store = _load_risk_params_store(risk_params_file)
-    return [t for t in store.tickers() if t not in _NON_EQUITY_TICKERS]
+    base = {t for t in store.tickers() if t not in _NON_EQUITY_TICKERS}
+    return sorted(base | set(_EXTRA_TAKASBANK_TICKERS))
 
 
 def fetch_takasbank_series(ticker: str) -> dict | None:
@@ -474,7 +512,7 @@ def compute_span_result(inputs: SpanCalculationInput) -> dict:
         )
 
     store = _load_risk_params_store(inputs.risk_params_file)
-    risk_params = _apply_risk_params_overrides(store.get(ticker), inputs)
+    risk_params = _apply_risk_params_overrides(_get_risk_params(store, ticker), inputs)
 
     if inputs.time_to_expiry_override is not None:
         time_to_expiry = inputs.time_to_expiry_override
@@ -1123,7 +1161,7 @@ def run_streamlit() -> None:
                 except Exception:
                     price_data = None
                 store = _load_risk_params_store(Path(risk_params_file))
-                risk_params = store.get(normalized)
+                risk_params = _get_risk_params(store, normalized)
                 takasbank_series = fetch_takasbank_series(normalized)
         except Exception as exc:
             st.error(f"Veri çekilemedi: {exc}")

@@ -66,6 +66,16 @@
             </phy>
         </phyPf>
         <phyPf>
+            <pfId>18286</pfId>
+            <pfCode>USDTRYK</pfCode>
+            <name>1000 USDTRY LEVEL 0</name>
+            <valueMeth>EQTY</valueMeth>
+            <phy>
+                <cId>478</cId>
+                <p>48112.4</p>
+            </phy>
+        </phyPf>
+        <phyPf>
             <pfId>18287</pfId>
             <pfCode>USDTRYKP</pfCode>
             <name>PHY DEL 1000 USDTRY LEVEL 0</name>
@@ -147,6 +157,29 @@
                         <priceScanPct>11.0</priceScanPct>
                         <volScanPct>0.20</volScanPct>
                     </scanRate>
+                </series>
+            </oopPf>
+            <oopPf>
+                <pfId>18286</pfId>
+                <pfCode>USDTRYK</pfCode>
+                <name>1000 USDTRY LEVEL 0</name>
+                <valueMeth>EQTY</valueMeth>
+                <series>
+                    <pe>20260831</pe>
+                    <t>0.009699</t>
+                    <intrRate><val>0.38</val></intrRate>
+                    <scanRate>
+                        <r>1</r>
+                        <priceScanPct>11.0</priceScanPct>
+                        <volScanPct>0.32</volScanPct>
+                    </scanRate>
+                    <opt>
+                        <k>44500.0</k>
+                        <o>P</o>
+                        <p>0.1</p>
+                        <v>0.095767</v>
+                        <cvf>1.0</cvf>
+                    </opt>
                 </series>
             </oopPf>
             <oopPf>

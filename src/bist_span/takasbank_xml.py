@@ -94,7 +94,7 @@ _HTTP_TIMEOUT = 30
 # Bazı endeks/döviz ürünlerinde, Takasbank'ın PDF risk parametre
 # dosyasındaki (SOM/Intra-Commodity Spread Charge kaynağı) TEMEL sembol
 # (ör. "XU030", "USDTRY") ile günlük XML'deki GERÇEK opsiyon ürün kodu
-# (pfCode, ör. "XU030D", "USDTRYKP") FARKLIDIR -- ikisi aynı dayanak
+# (pfCode, ör. "XU030D", "USDTRYK") FARKLIDIR -- ikisi aynı dayanak
 # varlığın opsiyonlarını temsil eder, sadece iki farklı Takasbank
 # yayınında iki farklı isimle geçer (gerçek XML'de doğrulanmıştır: PSR/
 # VSR değerleri PDF'teki "temel" isimle birebir eşleşiyor). Kullanıcıya
@@ -102,9 +102,20 @@ _HTTP_TIMEOUT = 30
 # günlük XML'e sorarken sessizce gerçek pfCode'a çeviriyoruz. Düz
 # "USDTRY" ve "XU030" pfCode'ları günlük XML'de SADECE dayanak varlık
 # (phyPf, referans fiyat) olarak var -- kendi opsiyon serileri yok.
+#
+# USD/TRY için XML'de GERÇEKTEN İKİ AYRI opsiyon ürünü var:
+# - USDTRYK ("1000 USDTRY LEVEL 0"): asıl/birincil ürün -- çok daha
+#   fazla vade (10) ve strike, PDF'teki "USDTRY" satırı BUNA karşılık
+#   gelir (en likit, en kapsamlı olan).
+# - USDTRYKP ("PHY DEL 1000 USDTRY LEVEL 0"): fiziki teslimatlı
+#   (<setlMeth>DELIV</setlMeth>) bir varyant -- sadece 2 vade, az
+#   strike. PDF'te KENDİ satırı yok; main.py'de USDTRY'nin SOM/
+#   Intra-Commodity Spread Charge'ını ödünç alır (bkz.
+#   main._RISK_PARAMS_FALLBACK_TICKER) -- PSR/VSR ikisinde de aynı
+#   (11.0/0.32), sadece SOM/ICS için ayrı bir PDF satırı yok.
 _XML_PFCODE_ALIASES = {
     "XU030": "XU030D",
-    "USDTRY": "USDTRYKP",
+    "USDTRY": "USDTRYK",
 }
 
 

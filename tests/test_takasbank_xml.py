@@ -178,15 +178,19 @@ def test_get_spot_price_unknown_ticker_raises(tmp_path, monkeypatch):
 
 def test_to_xml_pfcode_maps_known_aliases_and_passes_through_others():
     assert tbx.to_xml_pfcode("XU030") == "XU030D"
-    assert tbx.to_xml_pfcode("USDTRY") == "USDTRYKP"
+    assert tbx.to_xml_pfcode("USDTRY") == "USDTRYK"
     assert tbx.to_xml_pfcode("AKBNK") == "AKBNK"  # eşleşme yoksa aynen döner
+    # USDTRYKP'nin PDF'te kendi satırı yok ama XML'de kendi (alias
+    # GEREKTİRMEYEN) gerçek pfCode'u -- düz geçmeli.
+    assert tbx.to_xml_pfcode("USDTRYKP") == "USDTRYKP"
 
 
 def test_get_spot_price_resolves_alias_to_real_option_pfcode(tmp_path, monkeypatch):
-    """get_spot_price('USDTRY') PDF/temel isim -- ama gerçek opsiyon serisi
-    (ve strike'larla AYNI ölçekteki spot) USDTRYKP'nin phyPf'inde. Fixture'da
-    ikisi FARKLI değerlerde (48.1025 vs 48102.5) -- alias doğru
-    uygulanmazsa yanlış (1000x küçük) spot dönerdi."""
+    """get_spot_price('USDTRY') PDF/temel isim -- ama gerçek (asıl/likit)
+    opsiyon serisi USDTRYK'nin phyPf'inde. Fixture'da üçü de FARKLI
+    değerlerde (48.1025 / 48112.4 / 48102.5) -- alias doğru
+    uygulanmazsa yanlış fiyat dönerdi. USDTRYKP kendi adıyla da (alias
+    olmadan) doğrudan erişilebilir olmalı."""
     monkeypatch.setattr(tbx, "DISTILLED_DIR", tmp_path)
     trading_day = date(2026, 8, 25)
     distilled = tbx.build_distilled_cache(FIXTURE_PATH)
@@ -196,7 +200,10 @@ def test_get_spot_price_resolves_alias_to_real_option_pfcode(tmp_path, monkeypat
 
     spot = tbx.get_spot_price("USDTRY", today=trading_day)
     assert spot.ticker == "USDTRY"  # kullanıcıya hep TEMEL isim döner
-    assert spot.price == pytest.approx(48102.5)  # USDTRYKP'nin (strike'larla tutarlı) fiyatı
+    assert spot.price == pytest.approx(48112.4)  # USDTRYK'nin (asıl ürün) fiyatı
+
+    spot_kp = tbx.get_spot_price("USDTRYKP", today=trading_day)
+    assert spot_kp.price == pytest.approx(48102.5)  # kendi (fiziki teslimatlı) fiyatı
 
     spot_index = tbx.get_spot_price("XU030", today=trading_day)
     assert spot_index.price == pytest.approx(16971.54)
@@ -204,7 +211,8 @@ def test_get_spot_price_resolves_alias_to_real_option_pfcode(tmp_path, monkeypat
 
 def test_get_option_params_resolves_alias_for_index_and_fx(tmp_path, monkeypatch):
     """get_option_params('XU030', ...) / ('USDTRY', ...) gerçek XML pfCode'una
-    (XU030D/USDTRYKP) çevrilmeli ve doğru contract_size'ı taşımalı."""
+    (XU030D/USDTRYK) çevrilmeli ve doğru contract_size'ı taşımalı;
+    USDTRYKP kendi adıyla (alias olmadan) da doğrudan erişilebilmeli."""
     monkeypatch.setattr(tbx, "DISTILLED_DIR", tmp_path)
     trading_day = date(2026, 8, 25)
     distilled = tbx.build_distilled_cache(FIXTURE_PATH)
@@ -213,12 +221,19 @@ def test_get_option_params_resolves_alias_for_index_and_fx(tmp_path, monkeypatch
     )
 
     fx = tbx.get_option_params(
-        "USDTRY", date(2026, 8, 31), 48500.0, "call", today=trading_day
+        "USDTRY", date(2026, 8, 31), 44500.0, "put", today=trading_day
     )
     assert fx.ticker == "USDTRY"
-    assert fx.market_price == pytest.approx(36.6)
+    assert fx.market_price == pytest.approx(0.1)
     assert fx.contract_size == pytest.approx(1.0)
     assert fx.price_scan_range == pytest.approx(0.11)
+
+    fx_kp = tbx.get_option_params(
+        "USDTRYKP", date(2026, 8, 31), 48500.0, "call", today=trading_day
+    )
+    assert fx_kp.ticker == "USDTRYKP"
+    assert fx_kp.market_price == pytest.approx(36.6)
+    assert fx_kp.contract_size == pytest.approx(1.0)
 
     index = tbx.get_option_params(
         "XU030", date(2026, 8, 31), 14250.0, "put", today=trading_day
