@@ -1732,13 +1732,6 @@ def run_streamlit() -> None:
             ),
         )
         col.caption(f"**Toplam: {span['total_initial_margin']:,.2f} TL**")
-        col.caption(
-            "Gösterilen tutar, BISTECH/SPAN riski ve kısa opsiyonun güncel "
-            "değeri dikkate alınarak hesaplanmıştır. Opsiyon satışından "
-            "elde edilen prim bu hesaplamaya dahil edilmemiştir. İşlem "
-            "gününde tahsil edilen opsiyon primi, Takasbank hesaplamasında "
-            "başlangıç teminatı ihtiyacını azaltabilir."
-        )
 
     st.divider()
     m1, m2 = st.columns(2)
@@ -1758,6 +1751,16 @@ def run_streamlit() -> None:
         _margin_breakdown(m2, results["put"]["span"])
     else:
         m2.warning("PUT bu tarihte işlem görmemektedir.")
+
+    # Call/Put sütunlarının İKİSİNİN de altında, TEK SEFER (iki kez yan
+    # yana tekrarlanmasın diye -- bkz. proje sohbet geçmişi).
+    st.caption(
+        "Gösterilen tutar, BISTECH/SPAN riski ve kısa opsiyonun güncel "
+        "değeri dikkate alınarak hesaplanmıştır. Opsiyon satışından elde "
+        "edilen prim bu hesaplamaya dahil edilmemiştir. İşlem gününde "
+        "tahsil edilen opsiyon primi, Takasbank hesaplamasında başlangıç "
+        "teminatı ihtiyacını azaltabilir."
+    )
 
     with st.expander("Aracı Kurumların Takasbank Minimum Teminatına Uyguladığı Çarpanlar"):
         st.caption(
