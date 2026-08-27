@@ -1631,6 +1631,24 @@ def run_streamlit() -> None:
         return
     result_inputs = st.session_state["results_inputs"]
 
+    def _som_note(col, span: dict) -> None:
+        """SOM (Short Option Minimum), hesaplanan Scanning Risk'ten (+spread/
+        teslimat düzeltmeleri) yüksek olup TABAN olarak devreye girdiyse
+        (ör. TCELL 140 CALL: Scanning Risk 575.28 TL ama SOM 580.00 TL --
+        teminat SOM'a sabitlenir), bunu küçük bir notla açıkça belirt --
+        yoksa kullanıcı bunu "yuvarlama" sanıyor (bkz. proje sohbet geçmişi)."""
+        somsuz_toplam = (
+            span["scan_risk"]
+            + span["intra_commodity_spread_charge"]
+            + span["delivery_risk"]
+            - span["inter_commodity_spread_credit"]
+        )
+        if span["short_option_minimum"] > somsuz_toplam:
+            col.caption(
+                f"SOM tabanı uygulandı — Scanning Risk: {span['scan_risk']:,.2f} TL "
+                f"(SOM: {span['short_option_minimum']:,.2f} TL)"
+            )
+
     st.divider()
     m1, m2 = st.columns(2)
     if "call" in results:
@@ -1638,6 +1656,7 @@ def run_streamlit() -> None:
             "Call — Min. Teminat",
             f"{results['call']['span']['total_initial_margin']:,.2f} TL",
         )
+        _som_note(m1, results["call"]["span"])
     else:
         m1.warning("CALL bu tarihte işlem görmemektedir.")
     if "put" in results:
@@ -1645,6 +1664,7 @@ def run_streamlit() -> None:
             "Put — Min. Teminat",
             f"{results['put']['span']['total_initial_margin']:,.2f} TL",
         )
+        _som_note(m2, results["put"]["span"])
     else:
         m2.warning("PUT bu tarihte işlem görmemektedir.")
 
