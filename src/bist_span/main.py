@@ -1637,18 +1637,17 @@ def run_streamlit() -> None:
                 intra_commodity_spread_charge_override=icsc,
                 short_option_minimum_override=som,
             )
-            # Opsiyon Prim Değeri (Madde 37/3) -- "Bugün açıldı mı?"
-            # kutuları ve işlem fiyatı alanları sonuç bölümünde (aşağıda,
-            # _margin_breakdown içinde) çiziliyor; session_state'teki
-            # anahtarlarını buradan (henüz o widget'lar bu run'da yeniden
-            # çizilmeden ÖNCE) okuyoruz -- Streamlit'te bu güvenlidir,
-            # çünkü key'li bir widget'ın son değeri st.session_state'te
-            # widget'ın kendisi yeniden render edilmeden de erişilebilir.
-            call_opened_today = st.session_state.get("call_opened_today", False)
-            call_execution_price = st.session_state.get("call_execution_price")
-            put_opened_today = st.session_state.get("put_opened_today", False)
-            put_execution_price = st.session_state.get("put_execution_price")
-
+            # NOT: Opsiyon Prim Değeri (Madde 37/3) Streamlit arayüzünde
+            # KASITLI olarak sunulmuyor -- kullanıcıyla değerlendirildi
+            # (bkz. proje sohbet geçmişi): bu hesaplayıcı "TOPLAM ne kadar
+            # teminat gerekli" sorusuna cevap veriyor, "elimde zaten duran
+            # prim nakdi düşülünce EK olarak ne kadar yatırmam gerekir"
+            # sorusuna değil. Bu yüzden position_opened_today/
+            # execution_price_override her zaman varsayılan (False/None)
+            # kalır -- option_premium_value her zaman 0. CLI'da hâlâ
+            # --position-opened-today/--execution-price ile isteyen
+            # kullanabilir (span_engine formülü Madde 37/3'ü tam
+            # destekliyor), sadece web arayüzünde gösterilmiyor.
             try:
                 new_results = {}
                 # Sadece o tarihte GERÇEKTEN işlem gören taraf(lar) hesaplanır
@@ -1660,8 +1659,6 @@ def run_streamlit() -> None:
                         option_type="call",
                         volatility_override=call_volatility,
                         market_price_override=call_market_price,
-                        position_opened_today=call_opened_today,
-                        execution_price_override=call_execution_price,
                     )
                     new_results["call"] = compute_span_result(call_inputs)
                 if not put_missing:
@@ -1670,8 +1667,6 @@ def run_streamlit() -> None:
                         option_type="put",
                         volatility_override=put_volatility,
                         market_price_override=put_market_price,
-                        position_opened_today=put_opened_today,
-                        execution_price_override=put_execution_price,
                     )
                     new_results["put"] = compute_span_result(put_inputs)
                 st.session_state["results"] = new_results
@@ -1689,21 +1684,25 @@ def run_streamlit() -> None:
         return
     result_inputs = st.session_state["results_inputs"]
 
-    def _margin_breakdown(col, span: dict, key_prefix: str) -> None:
+    def _margin_breakdown(col, span: dict) -> None:
         """Min. Teminat kartının altına Takasbank'ın resmi formülünün
         (Merkezi Karşı Taraf Hizmeti ve Takas Esasları Prosedürü, Madde
-        33-38 -- bkz. proje sohbet geçmişi) üç bileşenini küçük, bilgi
-        ikonlu satırlarla döker: SPAN Risk, NOV (Net Opsiyon Değeri),
-        Opsiyon Prim Değeri; en altta bunların toplamı.
+        33-38 -- bkz. proje sohbet geçmişi) bileşenlerini küçük, bilgi
+        ikonlu satırlarla döker: SPAN Risk, NOV (Net Opsiyon Değeri);
+        en altta bunların toplamı.
 
         Gerçek PC-SPAN çıktısıyla doğrulanmıştır (THYAO 30.09.2026 K=300
         CALL: SPAN Risk 3.697, Available Net Option (2.102), Total
         Requirement 5.799 -- kuruşuna kadar örtüştü).
 
-        'Bugün açıldı mı?' işaretlenip işlem fiyatı girilirse (Opsiyon
-        Prim Değeri, Madde 37/3), bu session_state'e yazılır; 'Hesapla'
-        butonu bir SONRAKİ tıklamada bunu okuyup hesaba katar (her
-        override'da olduğu gibi -- bkz. _streamlit_override_row).
+        NOT: Opsiyon Prim Değeri (Madde 37/3) BİLİNÇLİ olarak burada
+        gösterilmiyor -- kullanıcıyla değerlendirildi (bkz. proje sohbet
+        geçmişi): bu hesaplayıcı "TOPLAM ne kadar teminat gerekli"
+        sorusuna cevap veriyor. Opsiyon satışından tahsil edilen prim
+        zaten hesapta nakit olarak durur; onu ayrıca "düşmek", teminat
+        SEVİYESİNİ değil, "elimdeki nakit üzerine EK olarak ne kadar
+        yatırmam gerekir" sorusunu cevaplar -- bu araç o soruyu sormuyor.
+        Bunun yerine altta sabit bir bilgilendirme notu gösteriliyor.
         """
         scan_component = (
             span["scan_risk"]
@@ -1732,30 +1731,14 @@ def run_streamlit() -> None:
                 "Option' olarak geçer."
             ),
         )
-
-        opened_today = col.checkbox(
-            "Bugün açıldı mı?", key=f"{key_prefix}_opened_today"
-        )
-        if opened_today:
-            col.number_input(
-                "İşlem Fiyatı (TL)",
-                min_value=0.0,
-                step=0.0001,
-                format="%.4f",
-                key=f"{key_prefix}_execution_price",
-            )
-        col.caption(
-            f"Opsiyon Prim Değeri: {span['option_premium_value']:,.2f} TL",
-            help=(
-                "Madde 37/3: SADECE pozisyon BUGÜN açıldıysa/kapatıldıysa "
-                "uygulanır -- kısa pozisyondan tahsil edilen prim, teminatı "
-                "AZALTIR (o parayı zaten aldın). Taşınan (mevcut) pozisyon "
-                "için 0'dır. Yukarıdaki 'Bugün açıldı mı?' kutusunu "
-                "işaretleyip işlem fiyatını girip 'Hesapla'ya tekrar "
-                "basarsan hesaba katılır."
-            ),
-        )
         col.caption(f"**Toplam: {span['total_initial_margin']:,.2f} TL**")
+        col.caption(
+            "Gösterilen tutar, BISTECH/SPAN riski ve kısa opsiyonun güncel "
+            "değeri dikkate alınarak hesaplanmıştır. Opsiyon satışından "
+            "elde edilen prim bu hesaplamaya dahil edilmemiştir. İşlem "
+            "gününde tahsil edilen opsiyon primi, Takasbank hesaplamasında "
+            "başlangıç teminatı ihtiyacını azaltabilir."
+        )
 
     st.divider()
     m1, m2 = st.columns(2)
@@ -1764,7 +1747,7 @@ def run_streamlit() -> None:
             "Call — Min. Teminat",
             f"{results['call']['span']['total_initial_margin']:,.2f} TL",
         )
-        _margin_breakdown(m1, results["call"]["span"], "call")
+        _margin_breakdown(m1, results["call"]["span"])
     else:
         m1.warning("CALL bu tarihte işlem görmemektedir.")
     if "put" in results:
@@ -1772,7 +1755,7 @@ def run_streamlit() -> None:
             "Put — Min. Teminat",
             f"{results['put']['span']['total_initial_margin']:,.2f} TL",
         )
-        _margin_breakdown(m2, results["put"]["span"], "put")
+        _margin_breakdown(m2, results["put"]["span"])
     else:
         m2.warning("PUT bu tarihte işlem görmemektedir.")
 
