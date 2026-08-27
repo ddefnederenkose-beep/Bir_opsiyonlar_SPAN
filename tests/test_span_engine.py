@@ -248,19 +248,32 @@ def test_thyao_scenario_pnl_matches_excel_reference(option_type, row):
 
 
 @pytest.mark.parametrize(
-    "option_type,expected_scan_risk",
-    [("call", 3901.039329), ("put", 2793.582309)],
+    "option_type,expected_scan_risk,expected_theoretical_price",
+    [
+        ("call", 3901.039329, 33.9036982728081),
+        ("put", 2793.582309, 1.8662977232698097),
+    ],
 )
 def test_thyao_calculate_span_margin_matches_excel_sonuclar(
-    option_type, expected_scan_risk
+    option_type, expected_scan_risk, expected_theoretical_price
 ):
     """calculate_span_margin'in tam çıktısı beklenen referans değerlerle eşleşmeli.
 
     CALL Scanning Risk=3.901,04 (Aktif Senaryo #11, regular -- Excel'le
-    doğrulanmış) -> SOM'u (1.640) geçtiği için Toplam=3.901,04.
-    PUT Scanning Risk=2.793,58 (Aktif Senaryo #16, extreme -- Takasbank'ın
-    resmi PC-SPAN verisiyle doğrulanmış, vol_shock=0) -> yine SOM'u geçtiği
-    için Toplam=2.793,58.
+    doğrulanmış); SOM (1.640) < Scanning Risk olduğu için BISTECH Marjin
+    Riski=3.901,04. PUT Scanning Risk=2.793,58 (Aktif Senaryo #16, extreme
+    -- Takasbank'ın resmi PC-SPAN verisiyle doğrulanmış, vol_shock=0); aynı
+    şekilde BISTECH Marjin Riski=2.793,58.
+
+    base_price verilmediği (None) için Net Opsiyon Değeri, calculate_scenario_pnl
+    ile AYNI teorik Black-Scholes fiyatını taban alır -- taşınan (bugün
+    açılmamış) kısa 1 kontratlık pozisyon için toplam artık SADECE
+    BISTECH Marjin Riski değil, +|kontrat|×taban×100 (kontrat çarpanı)
+    kadar daha yüksek (Madde 33-38, "Net Opsiyon Değeri" -- bkz.
+    calculate_span_margin docstring'i). Gerçek PC-SPAN çıktısıyla ayrıca
+    doğrulanmıştır (bkz. proje sohbet geçmişi: THYAO 30.09.2026 K=300
+    CALL -- SPAN Risk 3.697, Available Net Option (2.102), Total
+    Requirement 5.799 -- bizim formülümüzle kuruşuna kadar örtüştü).
     """
     position = OptionPosition(
         ticker="THYAO",
@@ -276,9 +289,14 @@ def test_thyao_calculate_span_margin_matches_excel_sonuclar(
         volatility=_THYAO_INPUTS["volatility"],
         risk_params=_THYAO_RISK_PARAMS,
     )
+    expected_nov_addition = 1 * expected_theoretical_price * position.contract_size
     assert result["scan_risk"] == pytest.approx(expected_scan_risk, abs=0.01)
-    assert result["total_initial_margin"] == pytest.approx(expected_scan_risk, abs=0.01)
     assert result["intra_commodity_spread_charge"] == 0.0  # tek bacaklı pozisyon
+    assert result["net_option_value"] == pytest.approx(-expected_nov_addition, abs=0.01)
+    assert result["option_premium_value"] == 0.0  # taşınan pozisyon, bugün açılmadı
+    assert result["total_initial_margin"] == pytest.approx(
+        expected_scan_risk + expected_nov_addition, abs=0.01
+    )
 
 
 def test_generate_risk_scenarios_extreme_uses_zero_vol_shock():

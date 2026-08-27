@@ -146,6 +146,14 @@ class SpanCalculationInput:
             "vadeler arası spread" olamaz. Sadece gerçekten aynı dayanak
             varlıkta birden fazla vadeli bir spread pozisyonun olduğunu
             biliyorsan, o zaman ilgili ücreti buraya açıkça gir.
+        position_opened_today, execution_price_override: Opsiyon Prim
+            Değeri (Madde 37/3) SADECE pozisyon BUGÜN açıldıysa/kapatıldıysa
+            uygulanır -- taşınan (mevcut) pozisyonlar için tanım gereği 0'dır
+            (varsayılan budur, position_opened_today=False). True verilip
+            execution_price_override de verilirse (kısa pozisyondan tahsil
+            edilen prim, yani işlem anındaki fiyat), Opsiyon Prim Değeri =
+            |kontrat| × execution_price_override × kontrat çarpanı olarak
+            hesaplanıp teminattan DÜŞÜLÜR (o parayı zaten tahsil ettin).
     """
 
     ticker: str
@@ -170,6 +178,8 @@ class SpanCalculationInput:
     extreme_move_covered_fraction_override: float | None = None
     intra_commodity_spread_charge_override: float | None = None
     short_option_minimum_override: float | None = None
+    position_opened_today: bool = False
+    execution_price_override: float | None = None
 
 
 # SpanCalculationInput'taki override alanı adı -> RiskParams'taki karşılık.
@@ -568,11 +578,22 @@ def compute_span_result(inputs: SpanCalculationInput) -> dict:
         else 0.0
     )
 
-    # market_price_override: 16 senaryonun "Fark" hesabında taban fiyat
-    # olarak kullanılır (ör. Takasbank XML'in opt/p'si). Verilmezse (None),
-    # span_engine kendi teorik Black-Scholes fiyatını taban alır (eski
-    # davranış). Bkz. SpanCalculationInput docstring'i.
+    # market_price_override: 16 senaryonun "Fark" hesabında VE Net Opsiyon
+    # Değeri'nde (Madde 37/2) taban fiyat olarak kullanılır (ör. Takasbank
+    # XML'in opt/p'si). Verilmezse (None), span_engine kendi teorik
+    # Black-Scholes fiyatını taban alır. Bkz. SpanCalculationInput docstring'i.
     market_price = inputs.market_price_override
+
+    # Opsiyon Prim Değeri (Madde 37/3): SADECE pozisyon bugün açıldıysa
+    # uygulanır -- taşınan pozisyon için (varsayılan) 0'dır. Bkz.
+    # SpanCalculationInput.position_opened_today docstring'i.
+    option_premium_value = 0.0
+    if inputs.position_opened_today and inputs.execution_price_override is not None:
+        option_premium_value = (
+            abs(inputs.contracts)
+            * inputs.execution_price_override
+            * position.contract_size
+        )
 
     span_result = calculate_span_margin(
         position=position,
@@ -581,6 +602,7 @@ def compute_span_result(inputs: SpanCalculationInput) -> dict:
         risk_params=risk_params,
         intra_commodity_spread_charge=intra_commodity_spread_charge,
         base_price=market_price,
+        option_premium_value=option_premium_value,
     )
 
     scenarios = _build_scenario_table(
@@ -909,6 +931,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Put için 16 senaryonun 'Fark' hesabında taban fiyat (bkz. --call-base-price).",
     )
     parser.add_argument(
+        "--position-opened-today",
+        action="store_true",
+        dest="position_opened_today",
+        help=(
+            "Pozisyon BUGÜN açıldıysa/kapatıldıysa Opsiyon Prim Değeri'ni "
+            "(Madde 37/3) hesaba katar -- --execution-price ile birlikte "
+            "kullanılmalı. Verilmezse (varsayılan), taşınan pozisyon "
+            "varsayılır ve bu terim 0'dır."
+        ),
+    )
+    parser.add_argument(
+        "--execution-price",
+        type=float,
+        default=None,
+        dest="execution_price_override",
+        help="--position-opened-today ile birlikte: pozisyonun bugünkü işlem fiyatı (TL).",
+    )
+    parser.add_argument(
         "--hide-scenarios",
         action="store_true",
         help="16 SPAN senaryosu + P&L dökümünü çıktıdan gizler",
@@ -939,6 +979,8 @@ def run_cli(argv: list[str] | None = None) -> None:
         short_option_minimum_override=args.short_option_minimum_override,
         call_market_price_override=args.call_market_price_override,
         put_market_price_override=args.put_market_price_override,
+        position_opened_today=args.position_opened_today,
+        execution_price_override=args.execution_price_override,
     )
 
     if args.option_type is None:
@@ -1595,6 +1637,18 @@ def run_streamlit() -> None:
                 intra_commodity_spread_charge_override=icsc,
                 short_option_minimum_override=som,
             )
+            # Opsiyon Prim Değeri (Madde 37/3) -- "Bugün açıldı mı?"
+            # kutuları ve işlem fiyatı alanları sonuç bölümünde (aşağıda,
+            # _margin_breakdown içinde) çiziliyor; session_state'teki
+            # anahtarlarını buradan (henüz o widget'lar bu run'da yeniden
+            # çizilmeden ÖNCE) okuyoruz -- Streamlit'te bu güvenlidir,
+            # çünkü key'li bir widget'ın son değeri st.session_state'te
+            # widget'ın kendisi yeniden render edilmeden de erişilebilir.
+            call_opened_today = st.session_state.get("call_opened_today", False)
+            call_execution_price = st.session_state.get("call_execution_price")
+            put_opened_today = st.session_state.get("put_opened_today", False)
+            put_execution_price = st.session_state.get("put_execution_price")
+
             try:
                 new_results = {}
                 # Sadece o tarihte GERÇEKTEN işlem gören taraf(lar) hesaplanır
@@ -1606,6 +1660,8 @@ def run_streamlit() -> None:
                         option_type="call",
                         volatility_override=call_volatility,
                         market_price_override=call_market_price,
+                        position_opened_today=call_opened_today,
+                        execution_price_override=call_execution_price,
                     )
                     new_results["call"] = compute_span_result(call_inputs)
                 if not put_missing:
@@ -1614,6 +1670,8 @@ def run_streamlit() -> None:
                         option_type="put",
                         volatility_override=put_volatility,
                         market_price_override=put_market_price,
+                        position_opened_today=put_opened_today,
+                        execution_price_override=put_execution_price,
                     )
                     new_results["put"] = compute_span_result(put_inputs)
                 st.session_state["results"] = new_results
@@ -1631,23 +1689,73 @@ def run_streamlit() -> None:
         return
     result_inputs = st.session_state["results_inputs"]
 
-    def _som_note(col, span: dict) -> None:
-        """SOM (Short Option Minimum), hesaplanan Scanning Risk'ten (+spread/
-        teslimat düzeltmeleri) yüksek olup TABAN olarak devreye girdiyse
-        (ör. TCELL 140 CALL: Scanning Risk 575.28 TL ama SOM 580.00 TL --
-        teminat SOM'a sabitlenir), bunu küçük bir notla açıkça belirt --
-        yoksa kullanıcı bunu "yuvarlama" sanıyor (bkz. proje sohbet geçmişi)."""
-        somsuz_toplam = (
+    def _margin_breakdown(col, span: dict, key_prefix: str) -> None:
+        """Min. Teminat kartının altına Takasbank'ın resmi formülünün
+        (Merkezi Karşı Taraf Hizmeti ve Takas Esasları Prosedürü, Madde
+        33-38 -- bkz. proje sohbet geçmişi) üç bileşenini küçük, bilgi
+        ikonlu satırlarla döker: SPAN Risk, NOV (Net Opsiyon Değeri),
+        Opsiyon Prim Değeri; en altta bunların toplamı.
+
+        Gerçek PC-SPAN çıktısıyla doğrulanmıştır (THYAO 30.09.2026 K=300
+        CALL: SPAN Risk 3.697, Available Net Option (2.102), Total
+        Requirement 5.799 -- kuruşuna kadar örtüştü).
+
+        'Bugün açıldı mı?' işaretlenip işlem fiyatı girilirse (Opsiyon
+        Prim Değeri, Madde 37/3), bu session_state'e yazılır; 'Hesapla'
+        butonu bir SONRAKİ tıklamada bunu okuyup hesaba katar (her
+        override'da olduğu gibi -- bkz. _streamlit_override_row).
+        """
+        scan_component = (
             span["scan_risk"]
             + span["intra_commodity_spread_charge"]
             + span["delivery_risk"]
             - span["inter_commodity_spread_credit"]
         )
-        if span["short_option_minimum"] > somsuz_toplam:
-            col.caption(
-                f"SOM tabanı uygulandı — Scanning Risk: {span['scan_risk']:,.2f} TL "
-                f"(SOM: {span['short_option_minimum']:,.2f} TL)"
+        bistech_margin_risk = max(span["short_option_minimum"], scan_component)
+        span_risk_help = "16 SPAN senaryosundan en kötüsü (Scanning Risk)."
+        if span["short_option_minimum"] > scan_component:
+            span_risk_help += (
+                f" Bu pozisyonda Scanning Risk ({span['scan_risk']:,.2f} TL), Short "
+                f"Option Minimum'un ({span['short_option_minimum']:,.2f} TL) altında "
+                "kaldığı için SOM tabanı uygulandı."
             )
+        col.caption(f"SPAN Risk: {bistech_margin_risk:,.2f} TL", help=span_risk_help)
+
+        nov_contribution = -span["net_option_value"]
+        col.caption(
+            f"NOV: {nov_contribution:+,.2f} TL",
+            help=(
+                "Net Opsiyon Değeri (Madde 37/2): bu kısa opsiyonu ŞU AN "
+                "geri satın alma maliyeti (|kontrat| × piyasa fiyatı × "
+                "kontrat çarpanı). Kısa pozisyon için her zaman teminata "
+                "EKLENİR -- Takasbank'ın resmi ekranında 'Available Net "
+                "Option' olarak geçer."
+            ),
+        )
+
+        opened_today = col.checkbox(
+            "Bugün açıldı mı?", key=f"{key_prefix}_opened_today"
+        )
+        if opened_today:
+            col.number_input(
+                "İşlem Fiyatı (TL)",
+                min_value=0.0,
+                step=0.0001,
+                format="%.4f",
+                key=f"{key_prefix}_execution_price",
+            )
+        col.caption(
+            f"Opsiyon Prim Değeri: {span['option_premium_value']:,.2f} TL",
+            help=(
+                "Madde 37/3: SADECE pozisyon BUGÜN açıldıysa/kapatıldıysa "
+                "uygulanır -- kısa pozisyondan tahsil edilen prim, teminatı "
+                "AZALTIR (o parayı zaten aldın). Taşınan (mevcut) pozisyon "
+                "için 0'dır. Yukarıdaki 'Bugün açıldı mı?' kutusunu "
+                "işaretleyip işlem fiyatını girip 'Hesapla'ya tekrar "
+                "basarsan hesaba katılır."
+            ),
+        )
+        col.caption(f"**Toplam: {span['total_initial_margin']:,.2f} TL**")
 
     st.divider()
     m1, m2 = st.columns(2)
@@ -1656,7 +1764,7 @@ def run_streamlit() -> None:
             "Call — Min. Teminat",
             f"{results['call']['span']['total_initial_margin']:,.2f} TL",
         )
-        _som_note(m1, results["call"]["span"])
+        _margin_breakdown(m1, results["call"]["span"], "call")
     else:
         m1.warning("CALL bu tarihte işlem görmemektedir.")
     if "put" in results:
@@ -1664,7 +1772,7 @@ def run_streamlit() -> None:
             "Put — Min. Teminat",
             f"{results['put']['span']['total_initial_margin']:,.2f} TL",
         )
-        _som_note(m2, results["put"]["span"])
+        _margin_breakdown(m2, results["put"]["span"], "put")
     else:
         m2.warning("PUT bu tarihte işlem görmemektedir.")
 

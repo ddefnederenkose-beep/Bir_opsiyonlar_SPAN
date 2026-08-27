@@ -323,14 +323,29 @@ def calculate_span_margin(
     delivery_risk: float = 0.0,
     inter_commodity_spread_credit: float = 0.0,
     base_price: float | None = None,
+    option_premium_value: float = 0.0,
 ) -> dict:
-    """Final SPAN başlangıç teminatını hesaplar.
+    """Final SPAN başlangıç teminatını hesaplar (Takasbank'ın "Merkezi Karşı
+    Taraf Hizmeti ve Takas Esasları Prosedürü" -- Madde 33-38 -- ile birebir).
 
-    Total Initial Margin = max(
+    BISTECH Marjin Riski = max(
         SOM,
         Scan Risk + Intra-Commodity Spread Charge + Delivery Risk
             - Inter-Commodity Spread Credit
     )
+    Başlangıç Teminatı = BISTECH Marjin Riski − Net Opsiyon Değeri − Opsiyon Prim Değeri
+
+    Net Opsiyon Değeri (Madde 37/2) = Uzun Opsiyon Pozisyonları Toplam
+    Değeri − Kısa Opsiyon Pozisyonları Toplam Değeri. Tek bir KISA
+    pozisyon için bu her zaman NEGATİFTİR (Uzun=0, Kısa=pozisyon değeri),
+    bu yüzden "− Net Opsiyon Değeri" teminata pozisyonun mevcut piyasa
+    değerini (|kontrat| × taban fiyat × kontrat çarpanı) EKLER -- kısa bir
+    opsiyonu şu an geri satın alma maliyeti de teminata dahil edilmesi
+    gereken ayrı bir yükümlülüktür, sadece gelecekteki risk (Scan Risk)
+    değil. Gerçek PC-SPAN çıktısıyla doğrulanmıştır (bkz. proje sohbet
+    geçmişi: THYAO 30.09.2026 K=300 CALL -- SPAN Risk 3.697 TL, Available
+    Net Option (2.102) TL, Total Requirement 5.799 TL, bizim hesabımızla
+    kuruşuna kadar örtüştü).
 
     ÖNEMLİ: intra_commodity_spread_charge risk_params'tan OTOMATİK
     alınmaz -- `position`, tek bacaklı/tek vadeli bir pozisyonu temsil
@@ -353,17 +368,25 @@ def calculate_span_margin(
         delivery_risk: Teslimat riski bileşeni (varsayılan 0).
         inter_commodity_spread_credit: Emtialar arası spread kredisi
             (varsayılan 0, tek pozisyon için genelde 0).
-        base_price: 16 senaryonun "Fark" hesabında kullanılacak taban
-            fiyat. Verilmezse (None) her senaryoda teorik Black-Scholes
-            hesaplanır (bkz. calculate_scenario_pnl). Verilirse (ör.
-            Takasbank XML'in opt/p'si), o sabit değer taban olarak
-            kullanılır.
+        base_price: Net Opsiyon Değeri VE 16 senaryonun "Fark" hesabında
+            kullanılacak taban fiyat. Verilmezse (None) teorik
+            Black-Scholes fiyatı kullanılır (bkz. calculate_scenario_pnl);
+            verilirse (ör. Takasbank XML'in opt/p'si), o sabit değer
+            kullanılır -- Madde 37/4: "Net opsiyon değerine esas olan
+            fiyatlar Takasbank tarafından belirlenir."
+        option_premium_value: Opsiyon Prim Değeri (Madde 37/3) -- SADECE
+            pozisyon BUGÜN açıldıysa/kapatıldıysa uygulanır (kısa
+            pozisyondan tahsil edilen prim, teminatı AZALTIR -- zaten o
+            parayı elde etmişsindir). Taşınan (mevcut) pozisyonlar için
+            bu terim tanım gereği 0'dır -- varsayılan budur; çağıran
+            taraf (main.py) sadece kullanıcı "bugün açıldı" deyip işlem
+            fiyatı girdiğinde bunu hesaplayıp geçirir.
 
     Returns:
         Hesabın ara adımlarını da içeren dict:
         {"scan_risk", "intra_commodity_spread_charge", "delivery_risk",
         "inter_commodity_spread_credit", "short_option_minimum",
-        "total_initial_margin"}.
+        "net_option_value", "option_premium_value", "total_initial_margin"}.
     """
     scenarios = generate_risk_scenarios(
         spot=spot,
@@ -387,11 +410,34 @@ def calculate_span_margin(
         - inter_commodity_spread_credit
     )
 
+    # Net Opsiyon Değeri (Madde 37/2): taban fiyat verilmemişse (base_price
+    # None), calculate_scenario_pnl'in her senaryoda yaptığı gibi teorik
+    # Black-Scholes fiyatına düşülür -- aynı "gerçek varsa gerçek, yoksa
+    # teorik" tutarlılığı korunur.
+    effective_price = base_price
+    if effective_price is None:
+        effective_price = black_scholes_price(
+            spot,
+            position.strike,
+            position.time_to_expiry,
+            position.risk_free_rate,
+            volatility,
+            position.option_type,
+        )
+    long_value = max(position.contracts, 0) * effective_price * position.contract_size
+    short_value = max(-position.contracts, 0) * effective_price * position.contract_size
+    net_option_value = long_value - short_value
+
+    bistech_margin_risk = max(som, scan_component)
+    total_initial_margin = bistech_margin_risk - net_option_value - option_premium_value
+
     return {
         "scan_risk": scan_risk,
         "intra_commodity_spread_charge": intra_commodity_spread_charge,
         "delivery_risk": delivery_risk,
         "inter_commodity_spread_credit": inter_commodity_spread_credit,
         "short_option_minimum": som,
-        "total_initial_margin": max(som, scan_component),
+        "net_option_value": net_option_value,
+        "option_premium_value": option_premium_value,
+        "total_initial_margin": total_initial_margin,
     }

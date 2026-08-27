@@ -7,6 +7,7 @@ PDF parse akışını hem de tam SPAN hesabını uçtan uca test eder).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -605,3 +606,75 @@ def test_compute_span_result_time_to_expiry_override_beats_takasbank(
     )
     result = compute_span_result(inputs)
     assert result["time_to_expiry"] == pytest.approx(0.1234)
+
+
+def test_compute_span_result_includes_net_option_value_by_default(fake_price_data):
+    """Varsayılan olarak (taşınan/bugün açılmamış pozisyon), Opsiyon Prim
+    Değeri 0 olmalı ama Net Opsiyon Değeri her zaman hesaba katılmalı
+    (Madde 33-38 -- bkz. proje sohbet geçmişi, PC-SPAN'la doğrulandı)."""
+    inputs = SpanCalculationInput(
+        ticker="AKBNK",
+        strike=65,
+        option_type="call",
+        contracts=-1,
+        expiry=date.today() + timedelta(days=30),
+        risk_params_file=FIXTURE_PATH,
+        market_price_override=1.72,
+    )
+    result = compute_span_result(inputs)
+    span = result["span"]
+    assert span["option_premium_value"] == 0.0
+    # kısa 1 kontrat, piyasa fiyatı 1.72, kontrat çarpanı 100 -> -172.0
+    assert span["net_option_value"] == pytest.approx(-172.0)
+    bistech_margin_risk = max(
+        span["short_option_minimum"],
+        span["scan_risk"] + span["intra_commodity_spread_charge"] + span["delivery_risk"]
+        - span["inter_commodity_spread_credit"],
+    )
+    assert span["total_initial_margin"] == pytest.approx(bistech_margin_risk + 172.0)
+
+
+def test_compute_span_result_applies_option_premium_value_when_opened_today(fake_price_data):
+    """position_opened_today=True + execution_price_override verilmişse,
+    Opsiyon Prim Değeri (Madde 37/3) hesaba katılıp teminatı AZALTMALI."""
+    base_inputs = SpanCalculationInput(
+        ticker="AKBNK",
+        strike=65,
+        option_type="call",
+        contracts=-2,
+        expiry=date.today() + timedelta(days=30),
+        risk_params_file=FIXTURE_PATH,
+        market_price_override=1.72,
+    )
+    opened_today_inputs = replace(
+        base_inputs, position_opened_today=True, execution_price_override=1.50
+    )
+
+    without_premium = compute_span_result(base_inputs)
+    with_premium = compute_span_result(opened_today_inputs)
+
+    # kısa 2 kontrat, işlem fiyatı 1.50, kontrat çarpanı 100 -> 300.0
+    assert with_premium["span"]["option_premium_value"] == pytest.approx(300.0)
+    assert without_premium["span"]["option_premium_value"] == 0.0
+    assert with_premium["span"]["total_initial_margin"] == pytest.approx(
+        without_premium["span"]["total_initial_margin"] - 300.0
+    )
+
+
+def test_compute_span_result_ignores_position_opened_today_without_execution_price(
+    fake_price_data,
+):
+    """position_opened_today=True ama execution_price_override verilmemişse,
+    Opsiyon Prim Değeri sessizce 0 kalmalı (uydurma bir fiyat kullanılmamalı)."""
+    inputs = SpanCalculationInput(
+        ticker="AKBNK",
+        strike=65,
+        option_type="call",
+        contracts=-1,
+        expiry=date.today() + timedelta(days=30),
+        risk_params_file=FIXTURE_PATH,
+        market_price_override=1.72,
+        position_opened_today=True,
+    )
+    result = compute_span_result(inputs)
+    assert result["span"]["option_premium_value"] == 0.0

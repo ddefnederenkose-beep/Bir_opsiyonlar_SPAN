@@ -53,5 +53,7 @@ def test_end_to_end_span_margin_for_akbnk_short_call():
         "delivery_risk",
         "inter_commodity_spread_credit",
         "short_option_minimum",
+        "net_option_value",
+        "option_premium_value",
         "total_initial_margin",
     }
