@@ -1648,6 +1648,30 @@ def run_streamlit() -> None:
     else:
         m2.warning("PUT bu tarihte işlem görmemektedir.")
 
+    with st.expander("Aracı Kurumların Takasbank Minimum Teminatına Uyguladığı Çarpanlar"):
+        st.caption(
+            "Takasbank, VİOP'ta işlem gören her kontrat için SPAN bazlı asgari "
+            "(minimum) teminat tutarlarını belirler ve yayınlar. Ancak aracı "
+            "kurumlar, kendi risk yönetimi politikaları gereği bu asgari "
+            "tutarın üzerine ek bir güvenlik marjı koyabilir. Tespit edilen "
+            "bazı aracı kurumların uyguladığı çarpanlar:"
+        )
+        st.caption(
+            "- [Garanti BBVA Yatırım](https://www.garantibbvayatirim.com.tr/urunlerimiz/viop): 2x Min Teminat\n"
+            "- [Ziraat Yatırım](https://www.ziraatyatirim.com.tr/tr/turev-araclar-v%C4%B1op): 2,00x Min Teminat\n"
+            "- [Fiba Yatırım](https://www.fibayatirim.com.tr/viop-teminat-tamamlama-span-carpani-ve-stop-out-uygulamasi-hakkinda-bilgilendirme): "
+            "1,5x Min Teminat (Takasbank'ın güncel SPAN parametreleri üzerinden)\n"
+            "- [Tacirler Yatırım](https://tacirler.com.tr/viop-teminat-rasyolarinin-guncellenmesi-hk-02-01-2025): "
+            "1x — Takasbank'ın uyguladığı oranları doğrudan kullanıyor, ek çarpan yok "
+            "(kaynak Ocak 2025 tarihli, teyide açık)\n"
+            "- [Osmanlı Menkul](https://www.osmanlimenkul.com.tr/hisse-ve-viop/hisse-ve-viop-urunlerimiz/hisse-turev/viop-teminat-ve-limit-bilgileri): "
+            "kullanılan teminat 7.500.000 TL eşiğini aştığında kademeli çarpan uygulanıyor "
+            "(tam sayısal değer sayfada belirtilmiyor, dosyaya bağlı)\n"
+            "- [IKON Menkul](http://www.ikonmenkul.com.tr/viop-baslangic-teminatlari): "
+            "Takasbank oranlarına piyasa koşullarına göre değişken \"Ek Teminat\" uyguluyor "
+            "(sabit bir çarpan belirtilmiyor)"
+        )
+
     if st.button("Bileşenler"):
         st.session_state["show_components"] = not st.session_state.get(
             "show_components", False
