@@ -1143,7 +1143,10 @@ def run_streamlit() -> None:
     """
     import streamlit as st
 
-    st.set_page_config(page_title="BIST SPAN Teminatı", layout="wide")
+    st.set_page_config(
+        page_title="VİOP SPAN Teminat Hesaplama — BIST Opsiyon Marjin Hesaplayıcı",
+        layout="wide",
+    )
     st.title("BIST Opsiyonları — Minimum SPAN Teminatı (Call & Put)")
     st.markdown(
         "Bir opsiyonu satıp (yazıp) kısa pozisyon aldığında, Takasbank'ın "

@@ -1,0 +1,13 @@
+# Railway/Render/Fly.io gibi Streamlit Community Cloud DIŞINDAKİ
+# barındırmalarda çalışırken gerekli ayarlar. Streamlit Community Cloud
+# bu dosyayı yok sayıp kendi ayarlarını kullanır -- yani mevcut ücretsiz
+# deploy'u (biropsiyonlarspan-...streamlit.app) BOZMAZ, sadece yeni
+# (özel domain'li) barındırmada devreye girer.
+
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false

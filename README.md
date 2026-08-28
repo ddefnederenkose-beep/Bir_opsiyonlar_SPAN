@@ -103,6 +103,44 @@ Takasbank risk parametreleri otomatik gelir, her biri ayrı bir "Override"
 checkbox'ıyla manuel değere çevrilebilir → strike gir (varsayılan: güncel
 fiyat) → **"Hesapla"** → call ve put için minimum teminat yan yana.
 
+## Canlı Yayın ve Kendi Domain'inizle Barındırma
+
+Şu an proje, `main` dalına her push'ta otomatik yeniden derlenen
+**Streamlit Community Cloud**'da ücretsiz yayında (`*.streamlit.app`
+adresinde). Bunun iki kısıtı var: (1) uzun süre ziyaretçi olmazsa
+"uykuya" geçiyor, (2) özel domain bağlama desteği yok/kısıtlı.
+
+Kendi domain'inizle, her zaman açık bir şekilde yayınlamak isterseniz
+(ör. **Railway** — kolay kurulum, aylık birkaç dolar, özel domain
+desteği var; alternatif olarak Render/Fly.io/bir VPS de olur), proje
+buna hazır (`Procfile`, `.streamlit/config.toml` zaten ekli). Adımlar:
+
+1. **Domain satın alın** (ör. Namecheap, GoDaddy, ya da bir `.tr`
+   kayıtçısı — Natro/Turhost) — genelde yıllık birkaç dolar/TL.
+2. **Railway'e kaydolun** (railway.app), "New Project" → "Deploy from
+   GitHub repo" ile bu depoyu (`ddefnederenkose-beep/Bir_opsiyonlar_SPAN`)
+   bağlayın. Railway, `Procfile`'ı otomatik bulup
+   `streamlit run src/bist_span/main.py --server.port $PORT ...`
+   komutuyla başlatacaktır.
+3. Railway'in proje ayarlarında **"Settings" → "Networking" → "Custom
+   Domain"** kısmından domain'inizi ekleyin; size bir CNAME hedefi
+   verecek (ör. `xxxx.up.railway.app`).
+4. Domain'i satın aldığınız yerin **DNS panelinden**, o CNAME kaydını
+   ekleyin (ör. `www` alt alan adı için). Railway, DNS doğrulandıktan
+   sonra otomatik HTTPS (SSL) sertifikası sağlar.
+5. Streamlit Community Cloud'daki eski link (`*.streamlit.app`) isterseniz
+   test/yedek olarak kalmaya devam edebilir — ikisi birbirinden bağımsız
+   çalışır, aynı GitHub deposunu paylaşırlar.
+
+**SEO notu:** "margin calculator" gibi geniş İngilizce terimlerde üst
+sıraya çıkmak (Investopedia, broker'lar vb. köklü sitelerle rekabet
+yüzünden) gerçekçi değil. Türkçe, niş terimlerde (ör. "VİOP teminat
+hesaplama", "SPAN teminat hesaplayıcı") çok daha az rekabet var —
+sayfa başlığı/açıklaması bu terimleri içerecek şekilde ayarlanıp
+[Google Search Console](https://search.google.com/search-console)'a
+site eklenmesi, gerçek görünürlük için domain'den daha etkili bir
+ilk adım.
+
 ## Yol Haritası
 
 - [x] `data_fetch.py`: fiyat çekme + volatilite + günlük cache
