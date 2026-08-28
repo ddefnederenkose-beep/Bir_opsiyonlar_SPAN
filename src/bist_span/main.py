@@ -1124,6 +1124,26 @@ def _streamlit_override_row(
     return manual_value
 
 
+# --- BAŞLANGIÇ: BIST Vadeli İşlem sayfası için izole üst navigasyon --------
+# Bu blok, opsiyon/vadeli işlem sayfaları arasında sayfanın EN ÜSTÜNDE görünen
+# küçük bir seçicidir (kenar çubuğundaki varsayılan sayfa seçiciye ek, daha
+# görünür bir kısayol). SADECE Streamlit'in resmi st.page_link()'ini kullanır
+# (JS/CSS enjeksiyonu YOK, SPAN hesap mantığına hiç dokunmaz) -- bu yüzden
+# vadeli işlem özelliği (pages/1_📈_BIST_Vadeli_İşlem.py, futures_xml.py,
+# futures_engine.py) silinmek istenirse, bu iki fonksiyon çağrısı (bu blok +
+# aşağıdaki _top_nav() çağrısı) da rahatça geri alınabilir; geri kalan hiçbir
+# opsiyon kodu bundan etkilenmez.
+def _top_nav() -> None:
+    import streamlit as st
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.page_link("main.py", label="📊 Opsiyon")
+    with c2:
+        st.page_link("pages/1_📈_BIST_Vadeli_İşlem.py", label="📈 Vadeli İşlem")
+# --- SON: BIST Vadeli İşlem sayfası için izole üst navigasyon --------------
+
+
 def run_streamlit() -> None:
     """Streamlit dashboard: firma seç, vade/strike Takasbank'ın günlük
     XML'inden gelen GERÇEK mevcut değerlerden seç, call/put min teminatı gör.
@@ -1190,6 +1210,8 @@ def run_streamlit() -> None:
         """,
         height=0,
     )
+
+    _top_nav()  # bkz. yukarıdaki izole blok -- opsiyon/vadeli işlem üst seçici
 
     st.title("BIST Opsiyonları — Minimum SPAN Teminatı (Call & Put)")
     st.markdown(
