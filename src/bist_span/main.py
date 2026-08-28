@@ -1142,11 +1142,55 @@ def run_streamlit() -> None:
     girerek override edilebilir.
     """
     import streamlit as st
+    import streamlit.components.v1 as components
 
     st.set_page_config(
         page_title="VİOP SPAN Teminat Hesaplama — BIST Opsiyon Marjin Hesaplayıcı",
+        page_icon="📊",
         layout="wide",
     )
+
+    # Streamlit'in kendisi <meta name="description"> desteklemiyor (SPA --
+    # sadece page_title/page_icon'u <head>'e yazıyor). Google arama
+    # sonucunda site adının altında bir AÇIKLAMA çıkması için (bkz. proje
+    # sohbet geçmişi -- Fintables örneği) bunu KENDİMİZ enjekte ediyoruz:
+    # components.html aynı origin'den render edildiği için parent.document
+    # üzerinden gerçek <head>'e meta etiketleri ekleyebiliyoruz -- bu,
+    # Streamlit topluluğunda bilinen standart bir SEO çözümü. height=0
+    # ile görünmez kalır. Googlebot sayfayı render ederek indexlediği
+    # için (headless Chromium) bu JS ile eklenen etiketleri de okuyabilir.
+    _SEO_DESCRIPTION = (
+        "VİOP opsiyonları için Takasbank SPAN metodolojisiyle minimum "
+        "başlangıç teminatını (marjin) anında hesaplayın. Güncel Takasbank "
+        "verileriyle call ve put opsiyon teminat tutarlarına bu sayfadan "
+        "ulaşabilirsiniz."
+    )
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            var head = window.parent.document.getElementsByTagName('head')[0];
+            var tags = [
+                {{name: "description", content: {_SEO_DESCRIPTION!r}}},
+                {{property: "og:title", content: "VİOP SPAN Teminat Hesaplama"}},
+                {{property: "og:description", content: {_SEO_DESCRIPTION!r}}},
+                {{property: "og:type", content: "website"}},
+            ];
+            tags.forEach(function(t) {{
+                var selector = t.name ? 'meta[name="' + t.name + '"]' : 'meta[property="' + t.property + '"]';
+                if (window.parent.document.querySelector(selector)) return;
+                var meta = window.parent.document.createElement('meta');
+                if (t.name) {{ meta.name = t.name; }}
+                if (t.property) {{ meta.setAttribute('property', t.property); }}
+                meta.content = t.content;
+                head.appendChild(meta);
+            }});
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
     st.title("BIST Opsiyonları — Minimum SPAN Teminatı (Call & Put)")
     st.markdown(
         "Bir opsiyonu satıp (yazıp) kısa pozisyon aldığında, Takasbank'ın "
