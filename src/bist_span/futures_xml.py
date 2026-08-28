@@ -1,7 +1,7 @@
 """Takasbank Günlük PC-SPAN XML'inden VADELİ İŞLEM (futures) verisi çeker.
 
 BAĞIMSIZ KATMAN: Bu modül, opsiyon katmanına (takasbank_xml.py,
-span_engine.py, main.py'nin opsiyon akışı) HİÇBİR ŞEKİLDE dokunmadan
+span_engine.py, BIST_Opsiyon.py'nin opsiyon akışı) HİÇBİR ŞEKİLDE dokunmadan
 yazılmıştır -- sadece takasbank_xml.py'nin PUBLIC, DEĞİŞTİRİLMEMİŞ
 fonksiyonlarını (ensure_daily_cache, folder_url, CACHE_DIR/RAW_DIR)
 salt-okunur olarak kullanır. Amaç: "BIST Vadeli İşlem" özelliği
@@ -45,7 +45,7 @@ egzotik futPf ürünleri (ör. "ELCBAS01", "AUVMS_N", "CNHTRY") kapsam
 dışı, ileride ayrı bir karar olarak eklenebilir. Bu modül ham ticker
 listesini filtrelemeden döner (_C ailesi hariç); "sadece bilinen hisse
 evreniyle kesiştir" filtresi ÇAĞIRAN TARAFTA (Vadeli İşlem sayfası)
-yapılır -- böylece bu modül main.py'ye bağımlı olmaz.
+yapılır -- böylece bu modül BIST_Opsiyon.py'ye bağımlı olmaz.
 """
 
 from __future__ import annotations

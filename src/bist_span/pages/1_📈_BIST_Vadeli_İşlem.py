@@ -1,19 +1,19 @@
 """BIST Vadeli İşlem — Minimum SPAN Teminatı (Streamlit sayfası).
 
 BAĞIMSIZ KATMAN: Bu dosya, "BIST Opsiyonları — Minimum SPAN Teminatı"
-sayfasının (main.py) SPAN HESAP MANTIĞINA HİÇBİR ŞEKİLDE dokunmadan
-yazılmıştır -- main.py'den sadece PUBLIC, DEĞİŞTİRİLMEMİŞ fonksiyonları
+sayfasının (BIST_Opsiyon.py) SPAN HESAP MANTIĞINA HİÇBİR ŞEKİLDE dokunmadan
+yazılmıştır -- BIST_Opsiyon.py'den sadece PUBLIC, DEĞİŞTİRİLMEMİŞ fonksiyonları
 (_streamlit_override_row, _top_nav) salt-okunur olarak import edip yeniden
 kullanır; hesap mantığı tamamen futures_xml.py/futures_engine.py'den gelir
-(onlar da main.py'ye bağımlı değildir). main.py'de TEK istisna: sayfanın en
-üstünde görünen küçük, izole "üst navigasyon" bloğu (main.py'deki
+(onlar da BIST_Opsiyon.py'ye bağımlı değildir). BIST_Opsiyon.py'de TEK istisna: sayfanın en
+üstünde görünen küçük, izole "üst navigasyon" bloğu (BIST_Opsiyon.py'deki
 "BAŞLANGIÇ/SON" yorum satırlarıyla işaretli) -- bu, kullanıcıyla açıkça
 konuşulup onaylanmış, SPAN hesabına dokunmayan, tek parça hâlinde geri
 alınabilir bir eklemedir. Amaç: bu üç dosya (bu sayfa + futures_xml.py +
-futures_engine.py) + main.py'deki o tek izole blok istenirse opsiyon
+futures_engine.py) + BIST_Opsiyon.py'deki o tek izole blok istenirse opsiyon
 özelliğinin hesap mantığını hiç etkilemeden silinebilsin.
 
-NOT: main.py'nin available_tickers()'ını (opsiyon risk parametre PDF'indeki
+NOT: BIST_Opsiyon.py'nin available_tickers()'ını (opsiyon risk parametre PDF'indeki
 ~29 hisse) hisse FİLTRESİ olarak KULLANMIYORUZ -- ilk sürümde öyle yapılmıştı
 ve AEFES gibi (opsiyonu PDF'te olmayan ama gerçek vadeli işlemi Takasbank
 XML'inde bulunan) hisseleri yanlışlıkla eliyordu. Bunun yerine, hisse OLMAYAN
@@ -21,9 +21,9 @@ XML'inde bulunan) hisseleri yanlışlıkla eliyordu. Bunun yerine, hisse OLMAYAN
 listeyle (bkz. _NON_EQUITY_FUTURES_*) eleyip geri kalan HER ŞEYİ hisse
 vadelisi sayıyoruz.
 
-Streamlit'in "pages/" klasör kuralı gereği bu dosya, ana script (main.py)
+Streamlit'in "pages/" klasör kuralı gereği bu dosya, ana script (BIST_Opsiyon.py)
 çalıştırıldığında kenar çubuğunda otomatik ikinci bir sayfa olarak belirir
--- main.py'ye "başka bir sayfa var" diye tek satır bile eklemeye gerek yok.
+-- BIST_Opsiyon.py'ye "başka bir sayfa var" diye tek satır bile eklemeye gerek yok.
 
 Vadeli işlem, opsiyonlardan yapısal olarak BASİTTİR: delta her zaman 1'dir
 (doğrusal enstrüman), Black-Scholes/volatilite/strike YOKTUR, ve Madde
@@ -43,10 +43,10 @@ from pathlib import Path
 
 import pandas as pd
 
-# `streamlit run src/bist_span/main.py` altındaki pages/ klasöründe
-# çalışırken bu dosya bağımsız bir script olarak yürütülür -- main.py'deki
-# AYNI sebeple (bkz. main.py'nin başındaki yorum) src/ dizinini sys.path'e
-# ekleyip mutlak import kullanıyoruz. Tek fark: bu dosya main.py'den bir
+# `streamlit run src/bist_span/BIST_Opsiyon.py` altındaki pages/ klasöründe
+# çalışırken bu dosya bağımsız bir script olarak yürütülür -- BIST_Opsiyon.py'deki
+# AYNI sebeple (bkz. BIST_Opsiyon.py'nin başındaki yorum) src/ dizinini sys.path'e
+# ekleyip mutlak import kullanıyoruz. Tek fark: bu dosya BIST_Opsiyon.py'den bir
 # kat daha derinde (pages/ altında) olduğu için bir .parent daha var.
 _SRC_DIR = str(Path(__file__).resolve().parent.parent.parent)
 if _SRC_DIR not in sys.path:
@@ -55,7 +55,7 @@ if _SRC_DIR not in sys.path:
 from bist_span import futures_engine as fe
 from bist_span import futures_xml as fx
 from bist_span import takasbank_xml as tbx
-from bist_span.main import _streamlit_override_row, _top_nav
+from bist_span.BIST_Opsiyon import _streamlit_override_row, _top_nav
 from bist_span.span_engine import apply_price_shock, generate_risk_scenarios
 
 _FRACTION_LABELS = ((0.0, "sabit"), (1 / 3, "1/3 PSR"), (2 / 3, "2/3 PSR"), (1.0, "tam PSR"))
@@ -97,9 +97,9 @@ def _is_stock_futures_ticker(ticker: str) -> bool:
 def _futures_scenario_description(
     price_multiplier: float, is_extreme: bool, emm: float, emcf: float
 ) -> str:
-    """main._scenario_description'ın vadeli-işlem-özel hali.
+    """BIST_Opsiyon._scenario_description'ın vadeli-işlem-özel hali.
 
-    main.py'deki sürüm her senaryoya bir "Vol yukarı/aşağı" etiketi de
+    BIST_Opsiyon.py'deki sürüm her senaryoya bir "Vol yukarı/aşağı" etiketi de
     ekler -- opsiyonlarda anlamlı (volatilite gerçekten fiyatı etkiler),
     ama vadeli işlemde volatilite riski hiç YOK (VSR her zaman 0, bkz.
     futures_engine.py docstring'i) -- o etiketi burada kullanmak yanıltıcı
@@ -130,7 +130,7 @@ def _futures_scenario_table(
 ) -> pd.DataFrame:
     """Vadeli işlemin 16 SPAN senaryosunu bir tabloya döker.
 
-    main._build_scenario_table'ın vadeli-işlem-özel hali: Black-Scholes/IV/
+    BIST_Opsiyon._build_scenario_table'ın vadeli-işlem-özel hali: Black-Scholes/IV/
     strike sütunları YOK (bkz. modül docstring'i) -- sadece şoklu fiyat ve
     doğrusal P&L. VSR her zaman 0 verildiği için (generate_risk_scenarios,
     futures_engine.calculate_futures_margin'in yaptığı gibi) 16 senaryo
@@ -175,7 +175,7 @@ def _futures_scenario_table(
 
 def _display_table(df: pd.DataFrame) -> pd.DataFrame:
     """16-senaryo tablosunu st.table ile göstermeye hazır sabit-ondalıklı
-    string sütunlara çevirir (bkz. main._scenario_display_table -- aynı
+    string sütunlara çevirir (bkz. BIST_Opsiyon._scenario_display_table -- aynı
     render nedeniyle, burada da düz HTML tablo tercih edildi)."""
     display = df.copy()
     display["Sen."] = display["Sen."].map(lambda v: f"{int(v)}")
@@ -196,7 +196,7 @@ def run_futures_page() -> None:
         layout="wide",
     )
 
-    _top_nav()  # main.py'deki izole blok -- opsiyon/vadeli işlem üst seçici
+    _top_nav()  # BIST_Opsiyon.py'deki izole blok -- opsiyon/vadeli işlem üst seçici
 
     st.title("BIST Vadeli İşlem — Minimum SPAN Teminatı")
     st.markdown(
@@ -267,7 +267,7 @@ def run_futures_page() -> None:
     # kendi cache'i de o dosyadan türetiliyor -- bkz. ensure_futures_daily_cache),
     # bu yüzden opsiyon sayfasındaki "en güncel dosya" garantisi (gün içi
     # INT dosyası çıktıkça otomatik yenilenme) burada da AYNEN geçerlidir --
-    # bkz. main.py'deki denk kullanım.
+    # bkz. BIST_Opsiyon.py'deki denk kullanım.
     takasbank_info = tbx.last_update_info()
     if takasbank_info:
         durum = (
@@ -407,28 +407,10 @@ def run_futures_page() -> None:
     st.markdown(f"En kötü senaryo: #{results['scenarios'].attrs['worst_scenario_no']}")
     st.table(_display_table(results["scenarios"]))
 
-    with st.expander("Ham Sonuç (doğrulama için)"):
-        st.json(
-            {
-                "position": {
-                    "ticker": ticker,
-                    "contracts": int(contracts),
-                    "contract_size": contract_size,
-                },
-                "params": {
-                    "price": price,
-                    "price_scan_range": psr,
-                    "extreme_move_multiplier": emm,
-                    "extreme_move_covered_fraction": emcf,
-                },
-                "span": span,
-            }
-        )
-
 
 # Streamlit'in "pages/" çalıştırıcısı, seçili sayfa script'ini __name__="__main__"
-# olarak çalıştırır (main.py'nin kendi __main__ korumasıyla AYNI davranış,
-# bkz. main.py'nin sonu) -- bu da bu dosya yanlışlıkla plain bir modül olarak
+# olarak çalıştırır (BIST_Opsiyon.py'nin kendi __main__ korumasıyla AYNI davranış,
+# bkz. BIST_Opsiyon.py'nin sonu) -- bu da bu dosya yanlışlıkla plain bir modül olarak
 # import edilirse (ör. bir test) Streamlit UI kodunun tetiklenmemesini sağlar.
 if __name__ == "__main__":
     run_futures_page()

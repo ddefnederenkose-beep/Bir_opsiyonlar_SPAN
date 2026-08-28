@@ -1,4 +1,4 @@
-"""main.py için testler.
+"""BIST_Opsiyon.py için testler.
 
 data_fetch (yfinance) çağrıları monkeypatch ile sahtelenir; risk
 parametreleri için gerçek Takasbank fixture'ı kullanılır (bu hem gerçek
@@ -14,8 +14,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from bist_span import data_fetch, main, takasbank_xml
-from bist_span.main import (
+from bist_span import BIST_Opsiyon as main
+from bist_span import data_fetch, takasbank_xml
+from bist_span.BIST_Opsiyon import (
     SpanCalculationInput,
     _normalize_ticker,
     available_tickers,

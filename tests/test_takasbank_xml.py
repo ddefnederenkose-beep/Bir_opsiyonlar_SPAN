@@ -185,7 +185,7 @@ def test_to_xml_pfcode_maps_known_aliases_and_passes_through_others():
     assert tbx.to_xml_pfcode("USDTRYKP") == "USDTRYKP"
     # Düz "USDTRY" (PDF'in kısaltılmış ismi) artık hiç alias'lanmıyor --
     # XML'de bu adla bir opsiyon serisi yok, kullanıcıya da hiç
-    # gösterilmiyor (bkz. main._NON_EQUITY_TICKERS).
+    # gösterilmiyor (bkz. BIST_Opsiyon._NON_EQUITY_TICKERS).
     assert tbx.to_xml_pfcode("USDTRY") == "USDTRY"
 
 

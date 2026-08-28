@@ -15,14 +15,14 @@ uygulatabilirsin.
 
 CLI kullanımı:
     # Hem call hem put (varsayılan, --option-type verilmezse):
-    python -m bist_span.main --ticker AKBNK --strike 65 --expiry 2026-09-18
+    python -m bist_span.BIST_Opsiyon --ticker AKBNK --strike 65 --expiry 2026-09-18
 
     # Tek taraf + manuel override örneği:
-    python -m bist_span.main --ticker AKBNK --strike 65 --option-type call \\
+    python -m bist_span.BIST_Opsiyon --ticker AKBNK --strike 65 --option-type call \\
         --expiry 2026-09-18 --volatility-scan-range 0.40
 
 Streamlit kullanımı:
-    streamlit run src/bist_span/main.py
+    streamlit run src/bist_span/BIST_Opsiyon.py
 """
 
 from __future__ import annotations
@@ -37,11 +37,11 @@ from pathlib import Path
 
 import pandas as pd
 
-# `streamlit run src/bist_span/main.py` bu dosyayı bağımsız bir script
+# `streamlit run src/bist_span/BIST_Opsiyon.py` bu dosyayı bağımsız bir script
 # olarak çalıştırır (paket içi bir modül olarak değil), bu yüzden göreli
 # importlar ("from . import ...") ImportError verir. src/ dizinini
 # sys.path'e ekleyip mutlak import kullanmak, dosyayı hem
-# `python -m bist_span.main` hem `streamlit run src/bist_span/main.py`
+# `python -m bist_span.BIST_Opsiyon` hem `streamlit run src/bist_span/BIST_Opsiyon.py`
 # hem de pytest ile çalıştırılabilir hale getirir.
 _SRC_DIR = str(Path(__file__).resolve().parent.parent)
 if _SRC_DIR not in sys.path:
@@ -1138,7 +1138,7 @@ def _top_nav() -> None:
 
     c1, c2 = st.columns(2)
     with c1:
-        st.page_link("main.py", label="📊 Opsiyon")
+        st.page_link("BIST_Opsiyon.py", label="📊 Opsiyon")
     with c2:
         st.page_link("pages/1_📈_BIST_Vadeli_İşlem.py", label="📈 Vadeli İşlem")
 # --- SON: BIST Vadeli İşlem sayfası için izole üst navigasyon --------------

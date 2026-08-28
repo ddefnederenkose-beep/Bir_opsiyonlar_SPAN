@@ -17,7 +17,7 @@ bist-span-margin/
 │       ├── data_fetch.py      # Fiyat/volatilite çekme + cache
 │       ├── risk_params.py     # Takasbank SPAN risk parametreleri
 │       ├── span_engine.py     # SPAN hesaplama motoru
-│       └── main.py            # CLI / Streamlit arayüzü
+│       └── BIST_Opsiyon.py    # CLI / Streamlit arayüzü
 ├── tests/
 │   ├── test_data_fetch.py
 │   ├── test_risk_params.py
@@ -46,7 +46,7 @@ bist-span-margin/
      `Total Initial Margin = max(SOM, Scan Risk + Intra-Commodity
      Spread Charge + Delivery Risk - Inter-Commodity Spread Credit)`
 
-4. **Kullanıcı Arayüzü** (`main.py`)
+4. **Kullanıcı Arayüzü** (`BIST_Opsiyon.py`)
    - Firma + strike + vade gir; sistem 1 kısa kontrat üzerinden hem
      call hem put için minimum SPAN teminatını hesaplar
    - Otomatik çekilen her bileşen (spot, volatilite, PSR, VSR, Extreme
@@ -95,7 +95,7 @@ python -m bist_span.main --ticker AKBNK --strike 65 --option-type call \
 ### Streamlit Dashboard
 
 ```bash
-streamlit run src/bist_span/main.py
+streamlit run src/bist_span/BIST_Opsiyon.py
 ```
 
 Akış: hisse + vade gir → **"Verileri Çek"** → güncel fiyat/volatilite ve
@@ -120,7 +120,7 @@ buna hazır (`Procfile`, `.streamlit/config.toml` zaten ekli). Adımlar:
 2. **Railway'e kaydolun** (railway.app), "New Project" → "Deploy from
    GitHub repo" ile bu depoyu (`ddefnederenkose-beep/Bir_opsiyonlar_SPAN`)
    bağlayın. Railway, `Procfile`'ı otomatik bulup
-   `streamlit run src/bist_span/main.py --server.port $PORT ...`
+   `streamlit run src/bist_span/BIST_Opsiyon.py --server.port $PORT ...`
    komutuyla başlatacaktır.
 3. Railway'in proje ayarlarında **"Settings" → "Networking" → "Custom
    Domain"** kısmından domain'inizi ekleyin; size bir CNAME hedefi
@@ -148,6 +148,6 @@ ilk adım.
       (farklı bölüm numaralandırmaları dahil) doğrulandı, bkz.
       `tests/fixtures/` ve modül docstring'i
 - [x] `span_engine.py`: Black-Scholes + 16 senaryo + Scan Risk + SOM + final formül
-- [x] `main.py`: CLI akışı + Streamlit dashboard
+- [x] `BIST_Opsiyon.py`: CLI akışı + Streamlit dashboard
 - [ ] (opsiyonel) Inter-Commodity Spread Credit ve Physical Delivery Margin
       parse'ı (şu an `calculate_span_margin`'e manuel/varsayılan 0 geçiliyor)
