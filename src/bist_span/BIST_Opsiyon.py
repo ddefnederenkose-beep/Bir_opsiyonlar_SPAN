@@ -73,11 +73,20 @@ _NON_EQUITY_TICKERS = {"USDTRY", "EURTRY", "X10XB", "XLBNK", "XSD25"}
 # "Risk Parametrelerinin Güncellenmesi" mektubu yayınladığında bu dosyayı
 # güncelleyip --risk-params-file ile (CLI) veya arayüzdeki dosya yolu
 # alanından (Streamlit) farklı bir dosya vererek override edebilirsin.
+#
+# Güncelleme geçmişi:
+#   - takasbank_span_sample_2.pdf: önceki mektup (artık sadece
+#     tests/test_risk_params.py'de format-uyumluluk regresyon testi
+#     olarak kullanılıyor -- SİLME).
+#   - takasbank_span_2026-09-02.pdf: 31.08.2026 tarihli "Risk
+#     Parametrelerinin Güncellenmesi" mektubu, 02.09.2026 Çarşamba günü
+#     gün içi ilk risk hesaplama anından itibaren geçerli (bkz. mektubun
+#     kendi metni) -- şu an GÜNCEL/aktif dosya budur.
 DEFAULT_RISK_PARAMS_FILE = (
     Path(__file__).resolve().parent.parent.parent
     / "tests"
     / "fixtures"
-    / "takasbank_span_sample_2.pdf"
+    / "takasbank_span_2026-09-02.pdf"
 )
 
 
