@@ -1142,14 +1142,47 @@ def _streamlit_override_row(
 # futures_engine.py) silinmek istenirse, bu iki fonksiyon çağrısı (bu blok +
 # aşağıdaki _top_nav() çağrısı) da rahatça geri alınabilir; geri kalan hiçbir
 # opsiyon kodu bundan etkilenmez.
-def _top_nav() -> None:
+#
+# TR/EN dil seçici de burada -- her iki sayfada da AYNI yerde görünsün diye
+# (bkz. i18n.py). Streamlit'te widget değerleri VARSAYILAN OLARAK sayfa
+# geçişinde SIFIRLANIR (bu iki sayfa ayrı script'ler); persist_state="session"
+# denendi ama sayfa geçişinde widget'ın YENİ script'teki dönüş değeri bir
+# rerun GERİDE kalıyor (gözlemlendi -- ör. Opsiyon'da EN seçilip Vadeli
+# İşlem'e geçince ilk rerun'da hâlâ TR görünüyordu). Bunun yerine bu
+# dosyada zaten kanıtlanmış olan desen kullanılıyor (bkz.
+# _streamlit_override_row): PAYLAŞILAN kaynak session_state["lang"] (widget'ın
+# kendi key'i DEĞİL) -- widget'ın "default"ı HER render'da bu paylaşılan
+# değerden türetilir, böylece widget her sayfada "resetlense" bile doğru
+# değeri göstererek başlar.
+def _top_nav() -> str:
     import streamlit as st
 
-    c1, c2 = st.columns(2)
+    from bist_span import i18n
+
+    c1, c2, c3 = st.columns([2, 2, 1])
+    lang_before = i18n.get_lang(st)
     with c1:
-        st.page_link("BIST_Opsiyon.py", label="📊 Opsiyon")
+        st.page_link("BIST_Opsiyon.py", label=i18n.t("nav_options", lang_before))
     with c2:
-        st.page_link("pages/1_📈_BIST_Vadeli_İşlem.py", label="📈 Vadeli İşlem")
+        st.page_link(
+            "pages/1_📈_BIST_Vadeli_İşlem.py", label=i18n.t("nav_futures", lang_before)
+        )
+    with c3:
+        default_choice = "EN" if lang_before == "en" else "TR"
+        choice = st.segmented_control(
+            "Language",
+            options=["TR", "EN"],
+            default=default_choice,
+            key="lang_widget",
+            label_visibility="collapsed",
+        )
+    # segmented_control zorunlu değil (required=False) -- kullanıcı seçili
+    # olanı tekrar tıklayıp seçimi TAMAMEN kaldırabilir, bu durumda None
+    # döner. Böyle bir durumda paylaşılan (sayfaya girerkenki) değere düşüyoruz.
+    choice = choice or default_choice
+    lang = "en" if choice == "EN" else "tr"
+    st.session_state["lang"] = lang
+    return lang
 # --- SON: BIST Vadeli İşlem sayfası için izole üst navigasyon --------------
 
 
@@ -1173,8 +1206,10 @@ def run_streamlit() -> None:
     import streamlit as st
     import streamlit.components.v1 as components
 
+    from bist_span import i18n
+
     st.set_page_config(
-        page_title="VİOP SPAN Teminat Hesaplama — BIST Opsiyon Marjin Hesaplayıcı",
+        page_title=i18n.t("page_title_options", i18n.get_lang(st)),
         page_icon="📊",
         layout="wide",
     )
@@ -1220,27 +1255,19 @@ def run_streamlit() -> None:
         height=0,
     )
 
-    _top_nav()  # bkz. yukarıdaki izole blok -- opsiyon/vadeli işlem üst seçici
+    lang = _top_nav()  # bkz. yukarıdaki izole blok -- opsiyon/vadeli işlem üst seçici + dil
 
-    st.title("BIST Opsiyonları — Minimum SPAN Teminatı (Call & Put)")
-    st.markdown(
-        "Bir opsiyonu satıp (yazıp) kısa pozisyon aldığında, Takasbank'ın "
-        "senden isteyeceği minimum başlangıç teminatını SPAN metodolojisiyle hesaplar.  \n"
-        "Opsiyonu alan (uzun pozisyon) taraf için teminat gerekmez — bu hesap sadece opsiyon satıcıları içindir."
-    )
-    st.caption(
-        "Firma ve vade gir, 'Verileri Çek'e bas. Güncel fiyat/volatilite ve "
-        "Takasbank risk parametreleri otomatik çekilir; istersen her bileşeni "
-        "aşağıda tek tek değiştirebilirsin."
-    )
+    st.title(i18n.t("title_options", lang))
+    st.markdown(i18n.t("intro_options", lang))
+    st.caption(i18n.t("caption_intro_options", lang))
 
-    with st.expander("Gelişmiş ayarlar"):
+    with st.expander(i18n.t("advanced_settings", lang)):
         risk_params_file = st.text_input(
-            "Takasbank Risk Parametre Dosyası (PDF/JSON yolu)",
+            i18n.t("risk_params_file_label", lang),
             value=str(DEFAULT_RISK_PARAMS_FILE),
         )
         contracts = st.number_input(
-            "Kontrat Sayısı (kısa pozisyon için negatif)", value=-1, step=1
+            i18n.t("contracts_label", lang), value=-1, step=1
         )
 
     @st.cache_data(show_spinner=False)
@@ -1252,27 +1279,20 @@ def run_streamlit() -> None:
     try:
         tickers = _cached_available_tickers(risk_params_file)
     except Exception as exc:
-        st.error(f"Risk parametre dosyası okunamadı: {exc}")
+        st.error(i18n.t("risk_params_read_error", lang, error=exc))
         return
 
     ticker = st.selectbox(
-        "Hisse",
+        i18n.t("ticker_label", lang),
         options=tickers,
         index=tickers.index("AKBNK") if "AKBNK" in tickers else 0,
-        help=(
-            "Bu liste, seçili risk parametre dosyasında tam opsiyon "
-            "verisi (PSR/VSR/SOM vb.) bulunan hisselerdir -- resmi "
-            "BIST30 endeks listesiyle birebir aynı olmayabilir."
-        ),
+        help=i18n.t("ticker_help", lang),
     )
 
-    if st.button("Verileri Çek", type="primary"):
+    if st.button(i18n.t("fetch_data_button", lang), type="primary"):
         normalized = _normalize_ticker(ticker)
         try:
-            with st.spinner(
-                "Fiyat/volatilite, risk parametreleri ve Takasbank verileri çekiliyor "
-                "(ilk çekişte ~10-30 saniye sürebilir)..."
-            ):
+            with st.spinner(i18n.t("fetch_data_spinner", lang)):
                 # yfinance -- artık SADECE fallback (spot: Takasbank yoksa;
                 # volatility: Takasbank implied vol yoksa). USDTRY/XU030
                 # gibi bazı ürünler yfinance'te standart bir hisse sembolü
@@ -1287,7 +1307,7 @@ def run_streamlit() -> None:
                 risk_params = _get_risk_params(store, normalized)
                 takasbank_series = fetch_takasbank_series(normalized)
         except Exception as exc:
-            st.error(f"Veri çekilemedi: {exc}")
+            st.error(i18n.t("fetch_data_error", lang, error=exc))
             st.session_state.pop("fetched", None)
         else:
             st.session_state["fetched"] = {
@@ -1301,7 +1321,7 @@ def run_streamlit() -> None:
     fetched = st.session_state.get("fetched")
     if not fetched or fetched["ticker"] != _normalize_ticker(ticker):
         if fetched:
-            st.info("Hisse değişti — tekrar 'Verileri Çek'e bas.")
+            st.info(i18n.t("ticker_changed_info", lang))
         return
 
     takasbank_series = fetched.get("takasbank_series")
@@ -1329,9 +1349,9 @@ def run_streamlit() -> None:
     except Exception:
         takasbank_spot = None
     if takasbank_spot is not None:
-        spot_auto, spot_source = takasbank_spot.price, "Takasbank XML"
+        spot_auto, spot_source = takasbank_spot.price, i18n.t("source_takasbank_xml", lang)
     else:
-        spot_auto, spot_source = fetched["spot"], "yfinance (fallback — Takasbank'ta bulunamadı)"
+        spot_auto, spot_source = fetched["spot"], i18n.t("source_yfinance_fallback", lang)
 
     # Tek, konsolide bilgi bloğu -- spot/taban fiyat/T/faiz/PSR/VSR/Extreme
     # Move/implied volatility gibi aşağıdaki HER alanın yanına ayrı ayrı
@@ -1339,10 +1359,8 @@ def run_streamlit() -> None:
     # burada TEK SEFER açıklıyoruz.
     if takasbank_info:
         source_link = takasbank_xml.folder_url(takasbank_info["source_date"])
-        durum = (
-            "gün sonu (EOD, o günün nihai verisi)"
-            if takasbank_info["is_final"]
-            else "gün içi ara güncelleme — daha yeni bir dosya çıktıkça otomatik yenilenir"
+        durum = i18n.t(
+            "status_eod" if takasbank_info["is_final"] else "status_intraday", lang
         )
         # "son güncelleme" olarak Takasbank'ın bu belgeyi KENDİ sunucusunda
         # yayınladığı an gösterilir (published_at) -- bizim onu ne zaman
@@ -1352,47 +1370,42 @@ def run_streamlit() -> None:
         # önce yazılmışsa) cached_at'e nazikçe düşülür.
         published_at = takasbank_info.get("published_at")
         if published_at:
-            update_line = (
-                f"Takasbank'ın yayınladığı belge: "
-                f"{published_at.strftime('%d.%m.%Y %H:%M')}"
+            update_line = i18n.t(
+                "published_line", lang, timestamp=published_at.strftime("%d.%m.%Y %H:%M")
             )
         else:
-            update_line = (
-                f"son güncelleme (bizim çekişimiz): "
-                f"{takasbank_info['cached_at'].strftime('%d.%m.%Y %H:%M')}"
+            update_line = i18n.t(
+                "cached_line",
+                lang,
+                timestamp=takasbank_info["cached_at"].strftime("%d.%m.%Y %H:%M"),
             )
         st.caption(
-            f":green[●] Spot, taban/piyasa fiyatı, T, faiz oranı, PSR, VSR, "
-            f"Extreme Move ve implied volatility [Takasbank'ın günlük PC-SPAN "
-            f"dosyasından]({source_link}) otomatik çekiliyor · veri tarihi: "
-            f"{takasbank_info['source_date'].strftime('%d.%m.%Y')} · {update_line} "
-            f"({durum}). Aşağıda 'Değiştir' ile her alanı elle üzerine yazabilirsin."
+            i18n.t(
+                "data_banner_options",
+                lang,
+                link=source_link,
+                date=takasbank_info["source_date"].strftime("%d.%m.%Y"),
+                update_line=update_line,
+                status=durum,
+            )
         )
     else:
-        st.caption(
-            "⚠️ Takasbank'ın günlük XML verisi şu an çekilemedi — spot/taban fiyat "
-            "ve risk parametreleri için yedek kaynaklara (PDF / yfinance / teorik "
-            "hesap) düşülüyor."
-        )
+        st.caption(i18n.t("data_unavailable_warning", lang))
 
     st.divider()
-    st.subheader("Vade ve Strike")
+    st.subheader(i18n.t("expiry_strike_subheader", lang))
 
     if takasbank_series:
         available_expiries = _available_expiries(takasbank_series)
         expiry = st.selectbox(
-            "Vade Tarihi",
+            i18n.t("expiry_label", lang),
             options=available_expiries,
             format_func=lambda d: d.strftime("%d.%m.%Y"),
-            help="Takasbank'ın güncel dosyasında bu hisse için gerçekten mevcut olan vadeler.",
+            help=i18n.t("expiry_help", lang),
         )
     else:
-        st.warning(
-            "Bu hisse için Takasbank XML verisi bulunamadı — vade tarihini elle gir. "
-            "T/faiz/PSR/VSR/volatilite otomatik çekilemeyecek, mevcut kaynaklara "
-            "(Takasbank PDF / yfinance historical) düşülecek."
-        )
-        expiry = st.date_input("Vade Tarihi")
+        st.warning(i18n.t("expiry_missing_warning", lang))
+        expiry = st.date_input(i18n.t("expiry_label", lang))
 
     available_strikes = (
         _available_strikes(takasbank_series, expiry) if takasbank_series else []
@@ -1403,14 +1416,14 @@ def run_streamlit() -> None:
             key=lambda i: abs(available_strikes[i] - spot_auto),
         )
         strike = st.selectbox(
-            "Kullanım Fiyatı (Strike)",
+            i18n.t("strike_label", lang),
             options=available_strikes,
             index=closest_idx,
-            help="Takasbank'ın bu vade için gerçekten listelediği strike'lar (güncel fiyata en yakını varsayılan).",
+            help=i18n.t("strike_help", lang),
         )
     else:
         strike = st.number_input(
-            "Kullanım Fiyatı",
+            i18n.t("strike_label_manual", lang),
             min_value=0.0,
             value=round(spot_auto, 4),
             step=0.0001,
@@ -1444,20 +1457,11 @@ def run_streamlit() -> None:
     call_missing = bool(takasbank_series) and takasbank_call is None
     put_missing = bool(takasbank_series) and takasbank_put is None
     if call_missing and put_missing:
-        st.caption(
-            f"CALL {strike:g} ve PUT {strike:g}, bu pozisyonlar bu tarihte "
-            "işlem görmemektedir."
-        )
+        st.caption(i18n.t("both_missing_caption", lang, strike=f"{strike:g}"))
     elif call_missing:
-        st.caption(
-            f"CALL {strike:g}, bu pozisyon bu tarihte işlem görmemektedir, "
-            f"sadece PUT {strike:g} pozisyonu bulunmaktadır."
-        )
+        st.caption(i18n.t("call_missing_caption", lang, strike=f"{strike:g}"))
     elif put_missing:
-        st.caption(
-            f"PUT {strike:g}, bu pozisyon bu tarihte işlem görmemektedir, "
-            f"sadece CALL {strike:g} pozisyonu bulunmaktadır."
-        )
+        st.caption(i18n.t("put_missing_caption", lang, strike=f"{strike:g}"))
 
     auto_tte = (
         takasbank_common.time_to_expiry
@@ -1472,25 +1476,29 @@ def run_streamlit() -> None:
 
     c1, c2, c3 = st.columns([2.2, 1.5, 1])
     with c1:
-        st.markdown("**Vadeye Kalan Süre (T, yıl)**")
+        st.markdown(f"**{i18n.t('tte_field_label', lang)}**")
         if takasbank_common:
-            st.caption(f"Otomatik: {_format_natural(auto_tte)}  ·  _(iş günü/250)_")
+            st.caption(i18n.t("tte_auto_business_days", lang, value=_format_natural(auto_tte)))
         else:
             st.caption(
-                f"Otomatik: {_format_natural(auto_tte)} "
-                f"({(expiry - date.today()).days} gün / 365)  ·  _hesaplanan_"
+                i18n.t(
+                    "tte_auto_calendar_days",
+                    lang,
+                    value=_format_natural(auto_tte),
+                    days=(expiry - date.today()).days,
+                )
             )
     with c3:
-        override_tte = st.checkbox("Değiştir", key="tte_chk")
+        override_tte = st.checkbox(i18n.t("override_checkbox", lang), key="tte_chk")
     with c2:
         manual_tte = st.number_input(
-            "T (yıl)",
+            i18n.t("tte_input_label", lang),
             step=0.0001,
             format="%.4f",
             key="tte_val",
             label_visibility="collapsed",
             disabled=not override_tte,
-            help="Bir referans hesaplayıcının (Excel vb.) ondalık T'siyle birebir karşılaştırmak için kullan.",
+            help=i18n.t("tte_help", lang),
         )
     # Değiştir işaretli ama alan hâlâ otomatik değerin yuvarlanmış
     # görüntüsündeyse (kullanıcı gerçekten dokunmadıysa), formüle giden T
@@ -1516,58 +1524,60 @@ def run_streamlit() -> None:
     def _src(label: str) -> str | None:
         return None if label == "Takasbank XML" else label
 
-    with st.expander("Otomatik Çekilen Değerler"):
+    with st.expander(i18n.t("auto_fetched_expander", lang)):
         spot = _streamlit_override_row(
-            st, "Güncel Fiyat (Spot)", spot_auto, "spot", source=_src(spot_source), live=True
+            st, i18n.t("field_spot", lang), spot_auto, "spot", source=_src(spot_source), live=True
         )
 
         # PSR/VSR/faiz: Takasbank'ın GÜNLÜK XML'i varsa oradan (canlı, bu
         # vadeye özel), yoksa Takasbank PDF'inden (statik referans) --
         # ikisi de aynı kaynaktan (Takasbank) geldiği için kullanıcıya
         # hangisi kullanıldığı etiketle belli edilir.
+        xml_source = i18n.t("source_takasbank_xml", lang)
+        pdf_source = i18n.t("source_takasbank_pdf", lang)
         if takasbank_common:
-            psr_auto, psr_source = takasbank_common.price_scan_range, "Takasbank XML"
-            vsr_auto, vsr_source = takasbank_common.volatility_scan_range, "Takasbank XML"
-            emm_auto, emm_source = takasbank_common.extreme_move_multiplier, "Takasbank XML"
+            psr_auto, psr_source = takasbank_common.price_scan_range, xml_source
+            vsr_auto, vsr_source = takasbank_common.volatility_scan_range, xml_source
+            emm_auto, emm_source = takasbank_common.extreme_move_multiplier, xml_source
             emcf_auto, emcf_source = (
                 takasbank_common.extreme_move_covered_fraction,
-                "Takasbank XML",
+                xml_source,
             )
-            rate_auto, rate_source = takasbank_common.risk_free_rate, "Takasbank XML"
+            rate_auto, rate_source = takasbank_common.risk_free_rate, xml_source
         else:
-            psr_auto, psr_source = rp.price_scan_range, "Takasbank dökümanı (PDF)"
-            vsr_auto, vsr_source = rp.volatility_scan_range, "Takasbank dökümanı (PDF)"
-            emm_auto, emm_source = rp.extreme_move_multiplier, "Takasbank dökümanı (PDF)"
+            psr_auto, psr_source = rp.price_scan_range, pdf_source
+            vsr_auto, vsr_source = rp.volatility_scan_range, pdf_source
+            emm_auto, emm_source = rp.extreme_move_multiplier, pdf_source
             emcf_auto, emcf_source = (
                 rp.extreme_move_covered_fraction,
-                "Takasbank dökümanı (PDF)",
+                pdf_source,
             )
-            rate_auto, rate_source = 0.45, "varsayılan (Takasbank XML bulunamadı)"
+            rate_auto, rate_source = 0.45, i18n.t("source_default_no_xml", lang)
 
         risk_free_rate = _streamlit_override_row(
-            st, "Risksiz Faiz Oranı", rate_auto, "rate", source=_src(rate_source)
+            st, i18n.t("field_risk_free_rate", lang), rate_auto, "rate", source=_src(rate_source)
         )
         psr = _streamlit_override_row(
-            st, "Price Scan Range (PSR)", psr_auto, "psr", source=_src(psr_source), decimals=4
+            st, i18n.t("field_psr", lang), psr_auto, "psr", source=_src(psr_source), decimals=4
         )
         vsr = _streamlit_override_row(
-            st, "Volatility Scan Range (VSR)", vsr_auto, "vsr", source=_src(vsr_source)
+            st, i18n.t("field_vsr", lang), vsr_auto, "vsr", source=_src(vsr_source)
         )
         emm = _streamlit_override_row(
-            st, "Extreme Move Multiplier", emm_auto, "emm", source=_src(emm_source)
+            st, i18n.t("field_emm", lang), emm_auto, "emm", source=_src(emm_source)
         )
         emcf = _streamlit_override_row(
-            st, "Extreme Move Covered Fraction", emcf_auto, "emcf", source=_src(emcf_source)
+            st, i18n.t("field_emcf", lang), emcf_auto, "emcf", source=_src(emcf_source)
         )
         som = _streamlit_override_row(
             st,
-            "Short Option Minimum (SOM)",
+            i18n.t("field_som", lang),
             rp.short_option_minimum,
             "som",
-            source="Takasbank dökümanı (PDF)",
+            source=pdf_source,
         )
 
-        st.markdown("**Volatilite**")
+        st.markdown(i18n.t("volatility_header", lang))
         # NOT: call_missing/put_missing True ise (bu strike'ta o taraf Takasbank
         # verisinde yok -- yani o gün işlem görmemiş), auto/fallback değeri HİÇ
         # hesaplamıyoruz ve satırı HİÇ göstermiyoruz -- teorik/uydurulmuş bir
@@ -1578,38 +1588,38 @@ def run_streamlit() -> None:
         if takasbank_call:
             call_vol_auto, call_vol_source = (
                 takasbank_call.implied_volatility,
-                "Takasbank XML",
+                xml_source,
             )
         elif not call_missing:
             call_vol_auto, call_vol_source = (
                 fetched["volatility"],
-                "yfinance historical (IV bulunamadı)",
+                i18n.t("source_yfinance_iv_missing", lang),
             )
         else:
             call_vol_auto = call_vol_source = None
         if takasbank_put:
             put_vol_auto, put_vol_source = (
                 takasbank_put.implied_volatility,
-                "Takasbank XML",
+                xml_source,
             )
         elif not put_missing:
             put_vol_auto, put_vol_source = (
                 fetched["volatility"],
-                "yfinance historical (IV bulunamadı)",
+                i18n.t("source_yfinance_iv_missing", lang),
             )
         else:
             put_vol_auto = put_vol_source = None
 
         call_volatility = (
             _streamlit_override_row(
-                st, "Volatilite — Call", call_vol_auto, "call_vol", source=_src(call_vol_source)
+                st, i18n.t("field_call_vol", lang), call_vol_auto, "call_vol", source=_src(call_vol_source)
             )
             if not call_missing
             else None
         )
         put_volatility = (
             _streamlit_override_row(
-                st, "Volatilite — Put", put_vol_auto, "put_vol", source=_src(put_vol_source)
+                st, i18n.t("field_put_vol", lang), put_vol_auto, "put_vol", source=_src(put_vol_source)
             )
             if not put_missing
             else None
@@ -1636,52 +1646,51 @@ def run_streamlit() -> None:
             if not put_missing
             else None
         )
+        theoretical_bs_source = i18n.t("source_theoretical_bs", lang)
         if takasbank_call:
-            call_base_auto, call_base_source = takasbank_call.market_price, "Takasbank XML"
+            call_base_auto, call_base_source = takasbank_call.market_price, xml_source
         elif not call_missing:
             call_base_auto, call_base_source = (
                 theoretical_call_price,
-                "teorik Black-Scholes (Takasbank piyasa fiyatı bulunamadı)",
+                theoretical_bs_source,
             )
         else:
             call_base_auto = call_base_source = None
         if takasbank_put:
-            put_base_auto, put_base_source = takasbank_put.market_price, "Takasbank XML"
+            put_base_auto, put_base_source = takasbank_put.market_price, xml_source
         elif not put_missing:
             put_base_auto, put_base_source = (
                 theoretical_put_price,
-                "teorik Black-Scholes (Takasbank piyasa fiyatı bulunamadı)",
+                theoretical_bs_source,
             )
         else:
             put_base_auto = put_base_source = None
 
-        st.markdown("**Call/Put Opsiyon Uzlaşma Fiyatı**")
+        st.markdown(i18n.t("settlement_price_header", lang))
         call_market_price = (
             _streamlit_override_row(
-                st, "Taban Fiyat — Call", call_base_auto, "call_base", source=_src(call_base_source)
+                st, i18n.t("field_call_base", lang), call_base_auto, "call_base", source=_src(call_base_source)
             )
             if not call_missing
             else None
         )
         put_market_price = (
             _streamlit_override_row(
-                st, "Taban Fiyat — Put", put_base_auto, "put_base", source=_src(put_base_source)
+                st, i18n.t("field_put_base", lang), put_base_auto, "put_base", source=_src(put_base_source)
             )
             if not put_missing
             else None
         )
 
         st.divider()
-        icsc_help = (
-            f"Takasbank'ın {fetched['ticker']} için yayınladığı referans değer: "
-            f"{rp.intra_commodity_spread_charge:,.2f} TL / spread birimi. Bu "
-            "ücret SADECE aynı dayanak varlıkta birden fazla vadeli gerçek "
-            "bir spread pozisyonun varsa uygulanır. Aşağıdaki tek bacaklı/"
-            "tek vadeli pozisyon için doğru değer 0'dır — spread "
-            "pozisyonun olduğunu biliyorsan alanı değiştir."
+        icsc_help = i18n.t(
+            "icsc_help",
+            lang,
+            ticker=fetched["ticker"],
+            value=f"{rp.intra_commodity_spread_charge:,.2f}",
         )
         icsc = st.number_input(
-            "Vadeler Arası Spread Ücreti (Intra-Commodity Spread Charge, TL)",
+            i18n.t("icsc_label_options", lang),
             value=0.0,
             min_value=0.0,
             step=0.0001,
@@ -1690,13 +1699,9 @@ def run_streamlit() -> None:
             help=icsc_help,
         )
 
-    if st.button("Hesapla", type="primary"):
+    if st.button(i18n.t("calculate_button", lang), type="primary"):
         if call_missing and put_missing:
-            st.error(
-                "Ne CALL ne de PUT bu strike/vade için Takasbank verisinde "
-                "bulunuyor — bu pozisyon bu tarihte işlem görmemektedir, "
-                "hesaplama yapılamaz."
-            )
+            st.error(i18n.t("both_missing_error", lang))
             st.session_state.pop("results", None)
         else:
             base_kwargs = dict(
@@ -1789,82 +1794,54 @@ def run_streamlit() -> None:
             - span["inter_commodity_spread_credit"]
         )
         bistech_margin_risk = max(span["short_option_minimum"], scan_component)
-        span_risk_help = "16 SPAN senaryosundan en kötüsü (Scanning Risk)."
+        span_risk_help = i18n.t("span_risk_help_base", lang)
         if span["short_option_minimum"] > scan_component:
-            span_risk_help += (
-                f" Bu pozisyonda Scanning Risk ({span['scan_risk']:,.2f} TL), Short "
-                f"Option Minimum'un ({span['short_option_minimum']:,.2f} TL) altında "
-                "kaldığı için SOM tabanı uygulandı."
+            span_risk_help += i18n.t(
+                "span_risk_help_som",
+                lang,
+                scan=f"{span['scan_risk']:,.2f}",
+                som=f"{span['short_option_minimum']:,.2f}",
             )
-        col.caption(f"SPAN Risk: {bistech_margin_risk:,.2f} TL", help=span_risk_help)
+        col.caption(
+            i18n.t("span_risk_caption", lang, value=f"{bistech_margin_risk:,.2f}"),
+            help=span_risk_help,
+        )
 
         nov_contribution = -span["net_option_value"]
         col.caption(
-            f"NOV: {nov_contribution:+,.2f} TL",
-            help=(
-                "Net Opsiyon Değeri (Madde 37/2): bu kısa opsiyonu ŞU AN "
-                "geri satın alma maliyeti (|kontrat| × piyasa fiyatı × "
-                "kontrat çarpanı). Kısa pozisyon için her zaman teminata "
-                "EKLENİR -- Takasbank'ın resmi ekranında 'Available Net "
-                "Option' olarak geçer."
-            ),
+            i18n.t("nov_caption", lang, value=f"{nov_contribution:+,.2f}"),
+            help=i18n.t("nov_help", lang),
         )
-        col.caption(f"**Toplam: {span['total_initial_margin']:,.2f} TL**")
+        col.caption(i18n.t("total_caption", lang, value=f"{span['total_initial_margin']:,.2f}"))
 
     st.divider()
     m1, m2 = st.columns(2)
     if "call" in results:
         m1.metric(
-            "Call — Min. Teminat",
-            f"{results['call']['span']['total_initial_margin']:,.2f} TL",
+            i18n.t("call_min_margin_label", lang),
+            f"{results['call']['span']['total_initial_margin']:,.2f} {'TL' if lang == 'tr' else 'TRY'}",
         )
         _margin_breakdown(m1, results["call"]["span"])
     else:
-        m1.warning("CALL bu tarihte işlem görmemektedir.")
+        m1.warning(i18n.t("call_not_traded_warning", lang))
     if "put" in results:
         m2.metric(
-            "Put — Min. Teminat",
-            f"{results['put']['span']['total_initial_margin']:,.2f} TL",
+            i18n.t("put_min_margin_label", lang),
+            f"{results['put']['span']['total_initial_margin']:,.2f} {'TL' if lang == 'tr' else 'TRY'}",
         )
         _margin_breakdown(m2, results["put"]["span"])
     else:
-        m2.warning("PUT bu tarihte işlem görmemektedir.")
+        m2.warning(i18n.t("put_not_traded_warning", lang))
 
     # Call/Put sütunlarının İKİSİNİN de altında, TEK SEFER (iki kez yan
     # yana tekrarlanmasın diye -- bkz. proje sohbet geçmişi).
-    st.caption(
-        "Gösterilen tutar, BISTECH/SPAN riski ve kısa opsiyonun güncel "
-        "değeri dikkate alınarak hesaplanmıştır. Opsiyon satışından elde "
-        "edilen prim bu hesaplamaya dahil edilmemiştir. İşlem gününde "
-        "tahsil edilen opsiyon primi, Takasbank hesaplamasında başlangıç "
-        "teminatı ihtiyacını azaltabilir."
-    )
+    st.caption(i18n.t("final_note_options", lang))
 
-    with st.expander("Aracı Kurumların Takasbank Minimum Teminatına Uyguladığı Çarpanlar"):
-        st.caption(
-            "Takasbank, VİOP'ta işlem gören her kontrat için SPAN bazlı asgari "
-            "(minimum) teminat tutarlarını belirler ve yayınlar. Ancak aracı "
-            "kurumlar, kendi risk yönetimi politikaları gereği bu asgari "
-            "tutarın üzerine ek bir güvenlik marjı koyabilir. Tespit edilen "
-            "bazı aracı kurumların uyguladığı çarpanlar:"
-        )
-        st.caption(
-            "- [Garanti BBVA Yatırım](https://www.garantibbvayatirim.com.tr/urunlerimiz/viop): 2x Min Teminat\n"
-            "- [Ziraat Yatırım](https://www.ziraatyatirim.com.tr/tr/turev-araclar-v%C4%B1op): 2,00x Min Teminat\n"
-            "- [Fiba Yatırım](https://www.fibayatirim.com.tr/viop-teminat-tamamlama-span-carpani-ve-stop-out-uygulamasi-hakkinda-bilgilendirme): "
-            "1,5x Min Teminat (Takasbank'ın güncel SPAN parametreleri üzerinden)\n"
-            "- [Tacirler Yatırım](https://tacirler.com.tr/viop-teminat-rasyolarinin-guncellenmesi-hk-02-01-2025): "
-            "1x — Takasbank'ın uyguladığı oranları doğrudan kullanıyor, ek çarpan yok "
-            "(kaynak Ocak 2025 tarihli, teyide açık)\n"
-            "- [Osmanlı Menkul](https://www.osmanlimenkul.com.tr/hisse-ve-viop/hisse-ve-viop-urunlerimiz/hisse-turev/viop-teminat-ve-limit-bilgileri): "
-            "kullanılan teminat 7.500.000 TL eşiğini aştığında kademeli çarpan uygulanıyor "
-            "(tam sayısal değer sayfada belirtilmiyor, dosyaya bağlı)\n"
-            "- [IKON Menkul](http://www.ikonmenkul.com.tr/viop-baslangic-teminatlari): "
-            "Takasbank oranlarına piyasa koşullarına göre değişken \"Ek Teminat\" uyguluyor "
-            "(sabit bir çarpan belirtilmiyor)"
-        )
+    with st.expander(i18n.t("broker_expander", lang)):
+        st.caption(i18n.t("broker_intro", lang))
+        st.caption(i18n.t("broker_list", lang))
 
-    if st.button("Bileşenler"):
+    if st.button(i18n.t("components_button", lang)):
         st.session_state["show_components"] = not st.session_state.get(
             "show_components", False
         )
@@ -1875,47 +1852,49 @@ def run_streamlit() -> None:
             side, result = next(iter(results.items()))
             side_inputs = replace(result_inputs, option_type=side)
             table = _format_result_table(side_inputs, result)
-        st.dataframe(table, hide_index=True, use_container_width=True)
+        # _format_result_table/_format_comparison_table'ın kendisi HİÇ
+        # değişmedi (bkz. modül docstring'i, testlerle kilitli) -- burada
+        # SADECE ekrana basılacak KOPYADAKİ "Alan" satır etiketleri çevriliyor.
+        table = i18n.translate_field_column(table, lang)
+        if lang == "en":
+            table = table.rename(columns={"Alan": "Field", "Değer": "Value"})
+        st.dataframe(table, hide_index=True, width="stretch")
 
     st.divider()
-    st.subheader("SPAN Mekanizması Nasıl Çalışır?")
-    st.write(
-        "SPAN, dayanak varlığın fiyatının ve volatilitesinin farklı yönlerde "
-        "hareket ettiği **16 farklı risk senaryosu** kurar: fiyat için "
-        "Price Scan Range'in (PSR) 0, ±1/3, ±2/3 ve ±tamamı kadar şoklar, "
-        "her fiyat seviyesinde volatilite için hem yukarı hem aşağı şoklar "
-        "(bu 14 senaryoyu oluşturur), artı PSR'nin çok daha büyük bir katı "
-        "kadar (Extreme Move Multiplier) 2 'aşırı hareket' senaryosu daha.\n\n"
-        "Her senaryoda opsiyon Black-Scholes ile yeniden fiyatlanır ve kısa "
-        "pozisyonun o senaryodaki kâr/zararı hesaplanır. **En kötü (en büyük "
-        "zararlı) senaryo** 'Scanning Risk' olarak seçilir — çünkü teminat, "
-        "olabilecek en kötü tek günlük hareketi karşılayacak kadar olmalıdır."
-    )
+    st.subheader(i18n.t("how_it_works_subheader", lang))
+    st.write(i18n.t("how_it_works_body", lang))
 
-    st.subheader("16 SPAN Senaryosu ve P&L (Scanning Risk dökümü)")
+    st.subheader(i18n.t("scenario_table_subheader", lang))
     sc1, sc2 = st.columns(2)
     with sc1:
         if "call" in results:
             st.markdown(
-                f"**Call** — en kötü senaryo: "
-                f"#{results['call']['scenarios'].attrs['worst_scenario_no']}"
+                i18n.t(
+                    "call_worst_scenario",
+                    lang,
+                    n=results["call"]["scenarios"].attrs["worst_scenario_no"],
+                )
             )
-            st.table(
-                _scenario_display_table(results["call"]["scenarios"], "Call Fiyatı")
-            )
+            # _scenario_display_table ÖNCE (değişmedi, hep Türkçe sütun
+            # adlarıyla çalışır) -- sonra SADECE ekrana basılacak metin
+            # sonucu çevriliyor (bkz. i18n.localize_scenario_table).
+            call_display = _scenario_display_table(results["call"]["scenarios"], "Call Fiyatı")
+            st.table(i18n.localize_scenario_table(call_display, lang))
         else:
-            st.caption("CALL bu tarihte işlem görmemektedir — senaryo tablosu yok.")
+            st.caption(i18n.t("call_no_scenario", lang))
     with sc2:
         if "put" in results:
             st.markdown(
-                f"**Put** — en kötü senaryo: "
-                f"#{results['put']['scenarios'].attrs['worst_scenario_no']}"
+                i18n.t(
+                    "put_worst_scenario",
+                    lang,
+                    n=results["put"]["scenarios"].attrs["worst_scenario_no"],
+                )
             )
-            st.table(
-                _scenario_display_table(results["put"]["scenarios"], "Put Fiyatı")
-            )
+            put_display = _scenario_display_table(results["put"]["scenarios"], "Put Fiyatı")
+            st.table(i18n.localize_scenario_table(put_display, lang))
         else:
-            st.caption("PUT bu tarihte işlem görmemektedir — senaryo tablosu yok.")
+            st.caption(i18n.t("put_no_scenario", lang))
 
 
 if __name__ == "__main__":

@@ -54,6 +54,7 @@ if _SRC_DIR not in sys.path:
 
 from bist_span import futures_engine as fe
 from bist_span import futures_xml as fx
+from bist_span import i18n
 from bist_span import takasbank_xml as tbx
 from bist_span.BIST_Opsiyon import _streamlit_override_row, _top_nav
 from bist_span.span_engine import apply_price_shock, generate_risk_scenarios
@@ -190,38 +191,30 @@ def _display_table(df: pd.DataFrame) -> pd.DataFrame:
 def run_futures_page() -> None:
     import streamlit as st
 
+    lang = i18n.get_lang(st)
+
     st.set_page_config(
-        page_title="BIST Vadeli İşlem SPAN Teminat Hesaplama",
+        page_title=i18n.t("page_title_futures", lang),
         page_icon="📈",
         layout="wide",
     )
 
-    _top_nav()  # BIST_Opsiyon.py'deki izole blok -- opsiyon/vadeli işlem üst seçici
+    lang = _top_nav()  # BIST_Opsiyon.py'deki izole blok -- opsiyon/vadeli işlem üst seçici + dil
 
-    st.title("BIST Vadeli İşlem — Minimum SPAN Teminatı")
-    st.markdown(
-        "Bir vadeli işlem sözleşmesinde (uzun ya da kısa fark etmeksizin) Takasbank'ın "
-        "senden isteyeceği minimum başlangıç teminatını SPAN metodolojisiyle hesaplar.  \n"
-        "Future'da risk simetriktir — hem alıcı hem satıcı taraf, piyasa aleyhe hareket "
-        "ettiğinde sınırsız kayıp riski taşır, bu yüzden ikisi de aynı şekilde "
-        "teminatlandırılır."
-    )
-    st.caption(
-        "Hisse ve vade seç, 'Hesapla'ya bas. Güncel fiyat ve Takasbank risk parametreleri "
-        "(PSR, Extreme Move) otomatik çekilir; istersen her bileşeni aşağıda tek tek "
-        "değiştirebilirsin."
-    )
-    with st.expander("Gelişmiş ayarlar"):
+    st.title(i18n.t("title_futures", lang))
+    st.markdown(i18n.t("intro_futures", lang))
+    st.caption(i18n.t("caption_intro_futures", lang))
+    with st.expander(i18n.t("advanced_settings", lang)):
         contracts = st.number_input(
-            "Kontrat Sayısı (kısa pozisyon için negatif)", value=-1, step=1, key="fut_contracts"
+            i18n.t("contracts_label", lang), value=-1, step=1, key="fut_contracts"
         )
 
     try:
-        with st.spinner("Takasbank vadeli işlem verisi çekiliyor..."):
+        with st.spinner(i18n.t("fetch_futures_spinner", lang)):
             fx.ensure_futures_daily_cache()
             all_futures_tickers = fx.list_futures_tickers()
     except Exception as exc:
-        st.error(f"Vadeli işlem verisi çekilemedi: {exc}")
+        st.error(i18n.t("fetch_futures_error", lang, error=exc))
         return
 
     # Kapsam (bilinçli, ilk sürüm kararı -- bkz. futures_xml.py docstring'i):
@@ -230,30 +223,25 @@ def run_futures_page() -> None:
     # _is_stock_futures_ticker) kapsam dışı.
     tickers = sorted(t for t in all_futures_tickers if _is_stock_futures_ticker(t))
     if not tickers:
-        st.warning(
-            "Şu an Takasbank verisinde hisse senedi vadeli işlem sözleşmesi bulunamadı."
-        )
+        st.warning(i18n.t("no_stock_futures_warning", lang))
         return
 
     ticker = st.selectbox(
-        "Hisse",
+        i18n.t("ticker_label", lang),
         options=tickers,
         index=tickers.index("AEFES") if "AEFES" in tickers else 0,
-        help=(
-            "Takasbank'ın güncel PC-SPAN dosyasında gerçek (sanal marjin serisi "
-            "olmayan) bir vadeli işlem sözleşmesi bulunan hisse senedi semboller."
-        ),
+        help=i18n.t("ticker_help_futures", lang),
     )
 
     expiries = fx.list_futures_expiries(ticker)
     if not expiries:
-        st.warning(f"{ticker} için Takasbank verisinde vadeli işlem sözleşmesi bulunamadı.")
+        st.warning(i18n.t("no_expiry_warning_futures", lang, ticker=ticker))
         return
     expiry = st.selectbox(
-        "Vade Tarihi",
+        i18n.t("expiry_label", lang),
         options=expiries,
         format_func=lambda d: d.strftime("%d.%m.%Y"),
-        help="Takasbank'ın güncel dosyasında bu hisse için gerçekten mevcut olan vadeler.",
+        help=i18n.t("expiry_help", lang),
     )
 
     try:
@@ -269,94 +257,98 @@ def run_futures_page() -> None:
     # INT dosyası çıktıkça otomatik yenilenme) burada da AYNEN geçerlidir --
     # bkz. BIST_Opsiyon.py'deki denk kullanım.
     takasbank_info = tbx.last_update_info()
+    xml_source = i18n.t("source_takasbank_xml", lang)
     if takasbank_info:
-        durum = (
-            "gün sonu (EOD, o günün nihai verisi)"
-            if takasbank_info["is_final"]
-            else "gün içi ara güncelleme — daha yeni bir dosya çıktıkça otomatik yenilenir"
+        durum = i18n.t(
+            "status_eod" if takasbank_info["is_final"] else "status_intraday", lang
         )
         published_at = takasbank_info.get("published_at")
         if published_at:
-            update_line = f"Takasbank'ın yayınladığı belge: {published_at.strftime('%d.%m.%Y %H:%M')}"
+            update_line = i18n.t(
+                "published_line", lang, timestamp=published_at.strftime("%d.%m.%Y %H:%M")
+            )
         else:
-            update_line = f"son güncelleme (bizim çekişimiz): {takasbank_info['cached_at'].strftime('%d.%m.%Y %H:%M')}"
+            update_line = i18n.t(
+                "cached_line",
+                lang,
+                timestamp=takasbank_info["cached_at"].strftime("%d.%m.%Y %H:%M"),
+            )
         st.caption(
-            f":green[●] Fiyat, T, PSR ve Extreme Move [Takasbank'ın günlük PC-SPAN "
-            f"dosyasından]({source_link}) otomatik çekiliyor · veri tarihi: "
-            f"{params.source_date.strftime('%d.%m.%Y')} · {update_line} ({durum}). "
-            "Aşağıda 'Değiştir' ile her alanı elle üzerine yazabilirsin."
+            i18n.t(
+                "data_banner_futures",
+                lang,
+                link=source_link,
+                date=params.source_date.strftime("%d.%m.%Y"),
+                update_line=update_line,
+                status=durum,
+            )
         )
     else:
         st.caption(
-            f"Fiyat, T, PSR ve Extreme Move [Takasbank'ın günlük PC-SPAN "
-            f"dosyasından]({source_link}) otomatik çekiliyor · veri tarihi: "
-            f"{params.source_date.strftime('%d.%m.%Y')}. Aşağıda 'Değiştir' ile her "
-            "alanı elle üzerine yazabilirsin."
+            i18n.t(
+                "data_banner_futures_no_info",
+                lang,
+                link=source_link,
+                date=params.source_date.strftime("%d.%m.%Y"),
+            )
         )
 
-    with st.expander("Otomatik Çekilen Değerler"):
+    with st.expander(i18n.t("auto_fetched_expander", lang)):
         price = _streamlit_override_row(
-            st, "Güncel Fiyat", params.price, "fut_price", source="Takasbank XML", live=True
+            st, i18n.t("field_current_price_futures", lang), params.price, "fut_price", source=xml_source, live=True
         )
         contract_size = _streamlit_override_row(
             st,
-            "Kontrat Çarpanı",
+            i18n.t("field_contract_multiplier", lang),
             params.contract_size,
             "fut_cvf",
-            source="Takasbank XML",
+            source=xml_source,
             decimals=2,
         )
         _streamlit_override_row(
             st,
-            "Vadeye Kalan Süre (T, yıl)",
+            i18n.t("tte_field_label", lang),
             params.time_to_expiry,
             "fut_tte",
-            source="Takasbank XML",
+            source=xml_source,
             decimals=6,
         )
-        st.caption(
-            "_T, sadece bilgi amaçlıdır — vadeli işlem teminatı doğrusal bir fiyat "
-            "şokuna dayandığı için (Black-Scholes yok) hesaba doğrudan girmez._"
-        )
+        st.caption(i18n.t("tte_info_futures", lang))
         psr = _streamlit_override_row(
-            st, "Price Scan Range (PSR)", params.price_scan_range, "fut_psr", source="Takasbank XML", decimals=4
+            st, i18n.t("field_psr", lang), params.price_scan_range, "fut_psr", source=xml_source, decimals=4
         )
         emm = _streamlit_override_row(
-            st, "Extreme Move Multiplier", params.extreme_move_multiplier, "fut_emm", source="Takasbank XML"
+            st, i18n.t("field_emm", lang), params.extreme_move_multiplier, "fut_emm", source=xml_source
         )
         emcf = _streamlit_override_row(
             st,
-            "Extreme Move Covered Fraction",
+            i18n.t("field_emcf", lang),
             params.extreme_move_covered_fraction,
             "fut_emcf",
-            source="Takasbank XML",
+            source=xml_source,
         )
 
         st.divider()
         icsc = st.number_input(
-            "Vadeler Arası Yayılma Riski (Intra-Commodity Spread Charge, TL)",
+            i18n.t("icsc_label_futures", lang),
             value=0.0,
             min_value=0.0,
             step=0.0001,
             format="%.4f",
             key="fut_icsc",
-            help=(
-                "Sadece AYNI dayanak varlıkta birden fazla vadeli gerçek bir spread "
-                "pozisyonun varsa uygulanır. Tek bacaklı/tek vadeli bir pozisyon için "
-                "doğru değer 0'dır."
-            ),
+            help=i18n.t("icsc_help_futures_leg", lang),
         )
         icc = st.number_input(
-            "Ürünler Arası Yayılma İndirimi (Inter-Commodity Spread Credit, TL)",
+            i18n.t("field_icc", lang),
             value=0.0,
             min_value=0.0,
             step=0.0001,
             format="%.4f",
             key="fut_icc",
-            help="Farklı ama korelasyonlu ürünler arası spread indirimidir. Sadece gerçek bir spread pozisyonun varsa uygula.",
+            help=i18n.t("icc_help", lang),
         )
 
-    if st.button("Hesapla", type="primary"):
+    if st.button(i18n.t("calculate_button", lang), type="primary"):
         position = fe.FuturesPosition(
             ticker=ticker, contracts=int(contracts), contract_size=contract_size
         )
@@ -383,29 +375,46 @@ def run_futures_page() -> None:
         return
 
     span = results["span"]
+    currency = "TL" if lang == "tr" else "TRY"
     st.divider()
     st.metric(
-        f"{ticker} {expiry.strftime('%d.%m.%Y')} — Min. Teminat",
-        f"{span['total_initial_margin']:,.2f} TL",
+        i18n.t(
+            "min_margin_metric_futures",
+            lang,
+            ticker=ticker,
+            expiry=expiry.strftime("%d.%m.%Y"),
+        ),
+        f"{span['total_initial_margin']:,.2f} {currency}",
     )
+    st.caption(i18n.t("single_position_note", lang))
     st.caption(
-        "Bu tutar, sadece TEK bir vadeli işlem pozisyonu içindir. Gerçek bir "
-        "portföyde farklı vade/dayanak varlıklardaki başka pozisyonlar birbirini "
-        "etkileyip (spread riski/indirimi nedeniyle) toplam teminat ihtiyacını "
-        "düşürebilir ya da artırabilir."
-    )
-    st.caption(
-        f"Tarama Riski (Scanning Risk): {span['scan_risk']:,.2f} TL",
-        help="16 SPAN senaryosundan en kötüsü (en büyük zarar).",
+        i18n.t("scanning_risk_caption", lang, value=f"{span['scan_risk']:,.2f}"),
+        help=i18n.t("scanning_risk_help", lang),
     )
     if span["intra_commodity_spread_charge"]:
-        st.caption(f"+ Vadeler Arası Yayılma Riski: {span['intra_commodity_spread_charge']:,.2f} TL")
+        st.caption(
+            i18n.t(
+                "icsc_contribution_caption",
+                lang,
+                value=f"{span['intra_commodity_spread_charge']:,.2f}",
+            )
+        )
     if span["inter_commodity_spread_credit"]:
-        st.caption(f"- Ürünler Arası Yayılma İndirimi: {span['inter_commodity_spread_credit']:,.2f} TL")
+        st.caption(
+            i18n.t(
+                "icc_contribution_caption",
+                lang,
+                value=f"{span['inter_commodity_spread_credit']:,.2f}",
+            )
+        )
 
-    st.subheader("16 SPAN Senaryosu ve P&L (Scanning Risk dökümü)")
-    st.markdown(f"En kötü senaryo: #{results['scenarios'].attrs['worst_scenario_no']}")
-    st.table(_display_table(results["scenarios"]))
+    st.subheader(i18n.t("scenario_table_subheader", lang))
+    st.markdown(i18n.t("worst_scenario_line", lang, n=results["scenarios"].attrs["worst_scenario_no"]))
+    # _display_table ÖNCE (değişmedi, hep Türkçe sütun adlarıyla çalışır) --
+    # sonra SADECE ekrana basılacak metin sonucu çevriliyor (bkz.
+    # i18n.localize_scenario_table, BIST_Opsiyon.py'deki denk kullanım).
+    display = _display_table(results["scenarios"])
+    st.table(i18n.localize_scenario_table(display, lang))
 
 
 # Streamlit'in "pages/" çalıştırıcısı, seçili sayfa script'ini __name__="__main__"
