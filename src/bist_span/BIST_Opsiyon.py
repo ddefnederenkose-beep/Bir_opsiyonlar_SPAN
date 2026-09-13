@@ -1138,7 +1138,7 @@ def _streamlit_override_row(
 # küçük bir seçicidir (kenar çubuğundaki varsayılan sayfa seçiciye ek, daha
 # görünür bir kısayol). SADECE Streamlit'in resmi st.page_link()'ini kullanır
 # (JS/CSS enjeksiyonu YOK, SPAN hesap mantığına hiç dokunmaz) -- bu yüzden
-# vadeli işlem özelliği (pages/1_📈_BIST_Vadeli_İşlem.py, futures_xml.py,
+# vadeli işlem özelliği (pages/1_BIST_Vadeli_İşlem.py, futures_xml.py,
 # futures_engine.py) silinmek istenirse, bu iki fonksiyon çağrısı (bu blok +
 # aşağıdaki _top_nav() çağrısı) da rahatça geri alınabilir; geri kalan hiçbir
 # opsiyon kodu bundan etkilenmez.
@@ -1165,7 +1165,7 @@ def _top_nav() -> str:
         st.page_link("BIST_Opsiyon.py", label=i18n.t("nav_options", lang_before))
     with c2:
         st.page_link(
-            "pages/1_📈_BIST_Vadeli_İşlem.py", label=i18n.t("nav_futures", lang_before)
+            "pages/1_BIST_Vadeli_İşlem.py", label=i18n.t("nav_futures", lang_before)
         )
     with c3:
         default_choice = "EN" if lang_before == "en" else "TR"
@@ -1210,7 +1210,6 @@ def run_streamlit() -> None:
 
     st.set_page_config(
         page_title=i18n.t("page_title_options", i18n.get_lang(st)),
-        page_icon="📊",
         layout="wide",
     )
 

@@ -195,7 +195,6 @@ def run_futures_page() -> None:
 
     st.set_page_config(
         page_title=i18n.t("page_title_futures", lang),
-        page_icon="📈",
         layout="wide",
     )
 

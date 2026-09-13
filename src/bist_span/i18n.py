@@ -61,8 +61,8 @@ def t(key: str, lang: str = DEFAULT_LANG, **kwargs) -> str:
 
 TRANSLATIONS: dict[str, dict[str, str]] = {
     # --- Üst navigasyon (BIST_Opsiyon.py: _top_nav) ---------------------
-    "nav_options": {"tr": "📊 Opsiyon", "en": "📊 Options"},
-    "nav_futures": {"tr": "📈 Vadeli İşlem", "en": "📈 Futures"},
+    "nav_options": {"tr": "Opsiyon", "en": "Options"},
+    "nav_futures": {"tr": "Vadeli İşlem", "en": "Futures"},
     # --- Opsiyon sayfası: başlık / giriş ---------------------------------
     "page_title_options": {
         "tr": "VİOP SPAN Teminat Hesaplama — BIST Opsiyon Marjin Hesaplayıcı",
@@ -176,12 +176,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "data_unavailable_warning": {
         "tr": (
-            "⚠️ Takasbank'ın günlük XML verisi şu an çekilemedi — spot/taban fiyat "
+            "Takasbank'ın günlük XML verisi şu an çekilemedi — spot/taban fiyat "
             "ve risk parametreleri için yedek kaynaklara (PDF / yfinance / teorik "
             "hesap) düşülüyor."
         ),
         "en": (
-            "⚠️ Takasbank's daily XML data could not be fetched right now — falling "
+            "Takasbank's daily XML data could not be fetched right now — falling "
             "back to backup sources (PDF / yfinance / theoretical calculation) for "
             "spot/base price and risk parameters."
         ),
