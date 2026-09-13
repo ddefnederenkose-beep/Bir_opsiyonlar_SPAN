@@ -1161,12 +1161,17 @@ def _top_nav() -> str:
 
     c1, c2, c3 = st.columns([2, 2, 1])
     lang_before = i18n.get_lang(st)
-    with c1:
-        st.page_link("BIST_Opsiyon.py", label=i18n.t("nav_options", lang_before))
-    with c2:
-        st.page_link(
-            "pages/1_BIST_Vadeli_İşlem.py", label=i18n.t("nav_futures", lang_before)
-        )
+    # ÖNEMLİ SIRALAMA: c3'ü (dil seçici) KODDA c1/c2'den ÖNCE dolduruyoruz --
+    # `with c1:`/`with c2:`/`with c3:` blokları hangi sırayla YAZILDIYSA o
+    # sırada ÇALIŞIR ama görsel yerleşim (c1 sol, c3 sağ) buna bağlı DEĞİLDİR,
+    # bu yüzden nav linkleri hâlâ soldan sağa doğru görünür. Sıralamayı
+    # değiştirmemizin sebebi: kullanıcı TAM BU rerun'da dili değiştirdiyse,
+    # widget'ın YENİ değeri sadece burada (segmented_control çağrısından
+    # SONRA) elde edilebiliyor -- c1/c2'deki nav linklerini eski koddaki gibi
+    # `lang_before` (bir önceki rerun'un dili) ile doldursaydık, dili
+    # değiştirdiğin O ANDA nav etiketleri bir rerun boyunca YANLIŞ dilde
+    # kalıyordu (gözlemlendi) -- sayfanın geri kalanı (title, gövde metni)
+    # doğru dile geçmişken SADECE nav linkleri geriden kalıyordu.
     with c3:
         default_choice = "EN" if lang_before == "en" else "TR"
         choice = st.segmented_control(
@@ -1182,6 +1187,12 @@ def _top_nav() -> str:
     choice = choice or default_choice
     lang = "en" if choice == "EN" else "tr"
     st.session_state["lang"] = lang
+    with c1:
+        st.page_link("BIST_Opsiyon.py", label=i18n.t("nav_options", lang))
+    with c2:
+        st.page_link(
+            "pages/1_BIST_Vadeli_İşlem.py", label=i18n.t("nav_futures", lang)
+        )
     return lang
 # --- SON: BIST Vadeli İşlem sayfası için izole üst navigasyon --------------
 
