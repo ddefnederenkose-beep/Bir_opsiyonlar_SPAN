@@ -55,40 +55,66 @@ def _build_head_snippet() -> str:
     )
 
 
+_ORIGINAL_TITLE = "<title>Streamlit</title>"
+_ORIGINAL_NOSCRIPT = "<noscript>You need to enable JavaScript to run this app.</noscript>"
+_ORIGINAL_LANG = '<html lang="en">'
+
+# Google, sayfada meta description bulunmadığı ya da onu yetersiz bulduğu
+# durumda snippet'i sayfanın GÖRÜNÜR metninden (JS'siz ilk geçişte: <noscript>)
+# çıkarabiliyor -- ekran görüntüsündeki "Streamlit You need to enable
+# JavaScript to run this app." tam olarak buydu. Bu yüzden <noscript>'in
+# içine de gerçek açıklamayı koyuyoruz (JS gerektiği bilgisi sonda kalıyor).
+_NOSCRIPT_REPLACEMENT = (
+    f"<noscript><h1>{TITLE}</h1><p>{DESCRIPTION}</p>"
+    "<p>Uygulamayı kullanmak için JavaScript gereklidir.</p></noscript>"
+)
+
+
 def patch(index_path: Path) -> bool:
-    """index.html'i yamalar. Zaten yamalıysa (marker varsa) dokunmaz.
+    """index.html'i yamalar. Her değişiklik KENDİ BAŞINA idempotent -- ör.
+    önceki bir deploy'da sadece <title>+meta yamalandıysa, bu sürüm
+    <noscript>/lang eksiklerini de tamamlar.
 
     Returns:
-        True: yeni yama uygulandı. False: zaten yamalıydı (no-op).
+        True: en az bir yeni değişiklik uygulandı. False: hepsi zaten yamalıydı.
     """
     html = index_path.read_text(encoding="utf-8")
-    if _MARKER in html:
+    original = html
+
+    # Streamlit sürüm güncellemesinde bu metinler değişmiş olabilir --
+    # eşleşmezse o adım sessizce atlanır (site yine de çalışır, sadece o
+    # tek etiket yamalanmaz).
+    html = html.replace(_ORIGINAL_TITLE, f"<title>{TITLE}</title>", 1)
+    html = html.replace(_ORIGINAL_NOSCRIPT, _NOSCRIPT_REPLACEMENT, 1)
+    html = html.replace(_ORIGINAL_LANG, '<html lang="tr">', 1)
+
+    if _MARKER not in html:
+        html = html.replace("</head>", _build_head_snippet() + "  </head>", 1)
+
+    if html == original:
         return False
-
-    if "<title>Streamlit</title>" in html:
-        html = html.replace("<title>Streamlit</title>", f"<title>{TITLE}</title>", 1)
-    else:
-        # Streamlit sürüm güncellemesinde <title> metni değişmiş olabilir --
-        # sessizce atlamak yerine (başlık hiç değişmez) en azından meta
-        # etiketlerini ekleyelim, </head> araması aşağıda zaten var.
-        pass
-
-    html = html.replace("</head>", _build_head_snippet() + "  </head>", 1)
     index_path.write_text(html, encoding="utf-8")
     return True
 
 
 def main() -> None:
-    static_dir = Path(os.path.dirname(streamlit.__file__)) / "static"
-    index_path = static_dir / "index.html"
-    if not index_path.exists():
-        print(f"[patch_static_index] UYARI: {index_path} bulunamadı, atlanıyor.")
-        return
-    changed = patch(index_path)
-    print(
-        f"[patch_static_index] {'yama uygulandı' if changed else 'zaten yamalı, atlandı'} "
-        f"-- {index_path}"
-    )
+    # Procfile: `python scripts/patch_static_index.py && streamlit run ...` --
+    # bu script HATA verirse (izin, beklenmeyen dosya düzeni vb.) `&&`
+    # yüzünden site HİÇ BAŞLAMAZ. SEO yaması bir "olsa iyi olur" -- site
+    # ayakta kalması çok daha önemli, bu yüzden her hatayı yutup 0 ile çıkıyoruz.
+    try:
+        static_dir = Path(os.path.dirname(streamlit.__file__)) / "static"
+        index_path = static_dir / "index.html"
+        if not index_path.exists():
+            print(f"[patch_static_index] UYARI: {index_path} bulunamadı, atlanıyor.")
+            return
+        changed = patch(index_path)
+        print(
+            f"[patch_static_index] {'yama uygulandı' if changed else 'zaten yamalı, atlandı'} "
+            f"-- {index_path}"
+        )
+    except Exception as exc:  # noqa: BLE001 -- bilerek geniş, bkz. yukarısı
+        print(f"[patch_static_index] UYARI: yama uygulanamadı ({exc!r}), site yine de başlatılıyor.")
 
 
 if __name__ == "__main__":
